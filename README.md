@@ -75,13 +75,26 @@ sudo journalctl -u spotflowd -f
 
 You should see `MQTT connected to Spotflow platform` in the logs.
 
-**7. Send a test log entry**
+**7. (Optional) Enable log severity in syslog**
+
+By default, rsyslog writes logs without a priority field, so severity cannot be determined and is omitted from the data sent to Spotflow.
+To include severity, configure rsyslog to use the traditional format:
+
+```bash
+echo '$ActionFileDefaultTemplate RSYSLOG_TraditionalFormat' | sudo tee /etc/rsyslog.d/00-spotflow.conf
+sudo systemctl restart rsyslog
+```
+
+This switches `/var/log/syslog` to RFC 3164 format (`<PRI>Mmm DD HH:MM:SS ...`), from which `spotflowd` extracts the severity level.
+
+**8. Send a test log entry**
 
 ```bash
 logger "hello from spotflowd"
+logger -p user.err "this is an error"
 ```
 
-The message should appear in the Spotflow dashboard within seconds.
+The messages should appear in the Spotflow dashboard within seconds.
 
 ---
 

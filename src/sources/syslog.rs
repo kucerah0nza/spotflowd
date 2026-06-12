@@ -109,10 +109,10 @@ fn parse_line(line: &str) -> LogEntry {
     if let Some(entry) = try_rsyslog_default(line) {
         return entry;
     }
-    // Fallback: treat whole line as message body.
+    // Fallback: treat whole line as message body; no priority info available.
     LogEntry {
         body: line.to_string(),
-        severity: Severity::Info,
+        severity: None,
         timestamp_ms: None,
         uptime_ms: None,
         source: "syslog".to_string(),
@@ -147,6 +147,7 @@ fn try_rfc5424(line: &str) -> Option<LogEntry> {
     }
 
     let (severity, _) = parse_priority(pri_str);
+    let severity = Some(severity);
     let timestamp_ms = parse_iso8601_ms(parts[0]);
     let body = parts[6].trim_start_matches("BOM").to_string();
 
@@ -201,6 +202,7 @@ fn try_rfc3164(line: &str) -> Option<LogEntry> {
     }
 
     let (severity, _) = parse_priority(pri_str);
+    let severity = Some(severity);
 
     // Extract hostname (2nd token) and tag (4th token) for labels.
     let mut labels = base_labels();
@@ -291,7 +293,7 @@ fn try_rsyslog_default(line: &str) -> Option<LogEntry> {
 
     Some(LogEntry {
         body,
-        severity: Severity::Info, // no priority in this format
+        severity: None, // rsyslog default format carries no priority
         timestamp_ms,
         uptime_ms: None,
         source: "syslog".to_string(),

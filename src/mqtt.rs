@@ -26,13 +26,13 @@ const INGEST_TOPIC: &str = "ingest-cbor";
 ///   1 = body, 4 = severity, 6 = deviceUptimeMs, 7 = deviceTimestampMs
 /// One MQTT message is published per entry.
 fn encode_entry(entry: &LogEntry) -> Result<Vec<u8>> {
-    let mut map = vec![
-        (CborValue::Integer(1u64.into()), CborValue::Text(entry.body.clone())),
-        (
+    let mut map = vec![(CborValue::Integer(1u64.into()), CborValue::Text(entry.body.clone()))];
+    if let Some(severity) = entry.severity {
+        map.push((
             CborValue::Integer(4u64.into()),
-            CborValue::Integer((entry.severity as u64).into()),
-        ),
-    ];
+            CborValue::Integer((severity as u64).into()),
+        ));
+    }
     if !entry.labels.is_empty() {
         let label_map: Vec<(CborValue, CborValue)> = entry
             .labels

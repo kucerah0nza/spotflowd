@@ -42,8 +42,8 @@ pub enum LabelValue {
 pub struct LogEntry {
     /// Human-readable log message.
     pub body: String,
-    /// Log severity level.
-    pub severity: Severity,
+    /// Log severity level. None when the source format does not carry priority.
+    pub severity: Option<Severity>,
     /// UNIX epoch milliseconds (device wall clock, if available).
     pub timestamp_ms: Option<u64>,
     /// Milliseconds since device boot (if available).

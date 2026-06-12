@@ -66,8 +66,7 @@ fn entry_to_log(entry: &std::collections::BTreeMap<String, String>) -> Option<Lo
     let severity = entry
         .get("PRIORITY")
         .and_then(|p| p.parse::<u8>().ok())
-        .map(Severity::from_syslog_priority)
-        .unwrap_or(Severity::Info);
+        .map(Severity::from_syslog_priority);
 
     // __REALTIME_TIMESTAMP is microseconds since Unix epoch.
     let timestamp_ms = entry
