@@ -51,6 +51,18 @@ pub async fn run(
         });
     }
 
+    if cfg.metrics.enabled {
+        let metrics_cfg = cfg.metrics.clone();
+        let seq_dir = cfg.buffer.disk_path.clone();
+        let publisher_clone = publisher.clone();
+        let shutdown_rx = shutdown.clone();
+        tokio::spawn(async move {
+            if let Err(e) = crate::metrics::run(metrics_cfg, seq_dir, publisher_clone, shutdown_rx).await {
+                error!("metrics task failed: {e}");
+            }
+        });
+    }
+
     drop(tx);
 
     // -----------------------------------------------------------------------

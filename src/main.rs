@@ -1,6 +1,7 @@
 mod buffer;
 mod config;
 mod log_entry;
+mod metrics;
 mod mqtt;
 mod orchestrator;
 mod sources;

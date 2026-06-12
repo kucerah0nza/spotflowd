@@ -1,0 +1,217 @@
+//! Per-stream aggregation with persistent sequence numbers.
+//!
+//! Each metric stream is identified by a key: `metric_name` for label-less
+//! metrics, or `metric_name|key=val|key=val` (labels sorted) for labeled ones.
+//!
+//! For each stream, a `StreamState` accumulates sum/count/min/max until the
+//! configured aggregation window elapses, then emits a `ReadyMetric`.
+//!
+//! Sequence numbers are stored in `<seq_dir>/metrics_seq.cbor` and loaded on
+//! startup so they survive daemon restarts.
+
+use super::{
+    AGG_1DAY, AGG_1HOUR, AGG_1MIN, AGG_NONE,
+    MetricSample, ReadyMetric,
+};
+use crate::config::MetricsConfig;
+use anyhow::Result;
+use ciborium::value::Value as CborValue;
+use std::collections::HashMap;
+use std::path::PathBuf;
+use std::time::{Duration, Instant};
+use tracing::debug;
+
+// ---------------------------------------------------------------------------
+// Per-stream accumulator
+// ---------------------------------------------------------------------------
+
+struct StreamState {
+    name: &'static str,
+    labels: Vec<(&'static str, String)>,
+    sum: f64,
+    count: u64,
+    min: f64,
+    max: f64,
+    window_start: Instant,
+    uptime_ms: u64,
+}
+
+impl StreamState {
+    fn new(name: &'static str, labels: Vec<(&'static str, String)>, v: f64, uptime_ms: u64) -> Self {
+        Self { name, labels, sum: v, count: 1, min: v, max: v, window_start: Instant::now(), uptime_ms }
+    }
+
+    fn update(&mut self, v: f64, uptime_ms: u64) {
+        self.sum += v;
+        self.count += 1;
+        if v < self.min { self.min = v; }
+        if v > self.max { self.max = v; }
+        self.uptime_ms = uptime_ms;
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Aggregator
+// ---------------------------------------------------------------------------
+
+pub struct Aggregator {
+    agg_cbor: u8,
+    agg_duration: Option<Duration>,
+    states: HashMap<String, StreamState>,
+    seq: HashMap<String, u64>,
+    seq_path: PathBuf,
+}
+
+impl Aggregator {
+    pub fn new(cfg: &MetricsConfig, seq_dir: PathBuf) -> Result<Self> {
+        let (agg_cbor, agg_duration) = match cfg.aggregation_interval.as_str() {
+            "none" => (AGG_NONE,  None),
+            "1m"   => (AGG_1MIN,  Some(Duration::from_secs(60))),
+            "1h"   => (AGG_1HOUR, Some(Duration::from_secs(3600))),
+            "1d"   => (AGG_1DAY,  Some(Duration::from_secs(86400))),
+            other  => anyhow::bail!("unknown aggregation_interval: {other}"),
+        };
+        let seq_path = seq_dir.join("metrics_seq.cbor");
+        let seq = load_seq(&seq_path);
+        debug!("loaded {} persisted metric sequence numbers", seq.len());
+        Ok(Self { agg_cbor, agg_duration, states: HashMap::new(), seq, seq_path })
+    }
+
+    /// Feed samples from one collection tick.  Returns metrics ready to publish.
+    pub fn ingest(&mut self, samples: Vec<MetricSample>, uptime_ms: u64) -> Vec<ReadyMetric> {
+        let mut ready = Vec::new();
+
+        for s in samples {
+            let key = stream_key(s.name, &s.labels);
+            let v = s.value.as_f64();
+
+            if self.agg_duration.is_none() {
+                // AGG_NONE: publish immediately as a raw sample.
+                let seq = self.next_seq(&key);
+                ready.push(ReadyMetric {
+                    name: s.name,
+                    agg_cbor: AGG_NONE,
+                    labels: s.labels,
+                    sum: v,
+                    count: None,
+                    min: None,
+                    max: None,
+                    seq,
+                    uptime_ms,
+                });
+            } else {
+                // Timed aggregation: accumulate into stream state.
+                let name = s.name;
+                let labels = s.labels;
+                self.states
+                    .entry(key)
+                    .and_modify(|st| st.update(v, uptime_ms))
+                    .or_insert_with(|| StreamState::new(name, labels, v, uptime_ms));
+            }
+        }
+
+        // Flush any streams whose aggregation window has elapsed.
+        if let Some(duration) = self.agg_duration {
+            let now = Instant::now();
+            let expired: Vec<String> = self.states
+                .iter()
+                .filter(|(_, st)| now.duration_since(st.window_start) >= duration)
+                .map(|(k, _)| k.clone())
+                .collect();
+
+            for key in expired {
+                let st = self.states.remove(&key).unwrap();
+                let seq = self.next_seq(&key);
+                debug!(
+                    "flush metric stream {key}: sum={:.3} count={} min={:.3} max={:.3}",
+                    st.sum, st.count, st.min, st.max
+                );
+                ready.push(ReadyMetric {
+                    name: st.name,
+                    agg_cbor: self.agg_cbor,
+                    labels: st.labels,
+                    sum: st.sum,
+                    count: Some(st.count),
+                    min: Some(st.min),
+                    max: Some(st.max),
+                    seq,
+                    uptime_ms: st.uptime_ms,
+                });
+            }
+        }
+
+        ready
+    }
+
+    /// Atomically persist sequence numbers to disk.
+    pub fn save_seq(&self) -> Result<()> {
+        if let Some(parent) = self.seq_path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        let map: Vec<(CborValue, CborValue)> = self.seq
+            .iter()
+            .map(|(k, v)| {
+                (CborValue::Text(k.clone()), CborValue::Integer((*v).into()))
+            })
+            .collect();
+        let mut buf = Vec::new();
+        ciborium::into_writer(&CborValue::Map(map), &mut buf)
+            .map_err(|e| anyhow::anyhow!("CBOR encode metrics_seq: {e}"))?;
+        // Atomic write: write to .tmp then rename so a crash mid-write
+        // never leaves a partially-written file.
+        let tmp = self.seq_path.with_extension("cbor.tmp");
+        std::fs::write(&tmp, &buf)?;
+        std::fs::rename(&tmp, &self.seq_path)?;
+        Ok(())
+    }
+
+    fn next_seq(&mut self, key: &str) -> u64 {
+        let seq = self.seq.entry(key.to_string()).or_insert(0);
+        *seq += 1;
+        *seq
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Stream key: "name" or "name|k=v|k=v" (labels assumed sorted by caller)
+// ---------------------------------------------------------------------------
+
+fn stream_key(name: &str, labels: &[(&str, String)]) -> String {
+    if labels.is_empty() {
+        return name.to_string();
+    }
+    let label_str = labels
+        .iter()
+        .map(|(k, v)| format!("{k}={v}"))
+        .collect::<Vec<_>>()
+        .join("|");
+    format!("{name}|{label_str}")
+}
+
+// ---------------------------------------------------------------------------
+// Sequence number persistence (CBOR map: tstr → uint)
+// ---------------------------------------------------------------------------
+
+fn load_seq(path: &PathBuf) -> HashMap<String, u64> {
+    let data = match std::fs::read(path) {
+        Ok(d) => d,
+        Err(_) => return HashMap::new(),
+    };
+    let value: CborValue = match ciborium::from_reader(data.as_slice()) {
+        Ok(v) => v,
+        Err(e) => {
+            tracing::warn!("failed to parse metrics_seq.cbor, starting fresh: {e}");
+            return HashMap::new();
+        }
+    };
+    let CborValue::Map(entries) = value else { return HashMap::new() };
+    let mut map = HashMap::new();
+    for (k, v) in entries {
+        if let (CborValue::Text(key), CborValue::Integer(seq)) = (k, v) {
+            if let Ok(n) = u64::try_from(seq) {
+                map.insert(key, n);
+            }
+        }
+    }
+    map
+}

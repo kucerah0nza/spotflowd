@@ -80,6 +80,14 @@ impl MqttPublisher {
         self.connected.load(Ordering::Relaxed)
     }
 
+    /// Publish a pre-encoded CBOR payload to the ingest topic (QoS 0).
+    pub async fn publish_payload(&self, payload: Vec<u8>) -> Result<()> {
+        self.client
+            .publish(INGEST_TOPIC, QoS::AtMostOnce, false, payload)
+            .await
+            .context("MQTT publish failed")
+    }
+
     /// Publish a slice of entries — one MQTT message per entry (QoS 0).
     pub async fn publish_batch(&self, entries: &[LogEntry]) -> Result<()> {
         for entry in entries {

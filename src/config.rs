@@ -10,6 +10,92 @@ pub struct Config {
     pub mqtt: MqttConfig,
     pub sources: SourcesConfig,
     pub buffer: BufferConfig,
+    #[serde(default)]
+    pub metrics: MetricsConfig,
+}
+
+// ---------------------------------------------------------------------------
+// Metrics
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct MetricsConfig {
+    /// Set to true to enable the metrics subsystem.
+    #[serde(default)]
+    pub enabled: bool,
+    /// How often to read /proc and /sys (seconds).
+    #[serde(default = "default_collection_interval")]
+    pub collection_interval_secs: u64,
+    /// Upload window: "none" | "1m" | "1h" | "1d".
+    /// "none" → publish each raw sample immediately (no aggregation).
+    /// "1m"   → accumulate samples for one minute, then publish sum/count/min/max.
+    #[serde(default = "default_aggregation_interval")]
+    pub aggregation_interval: String,
+    #[serde(default)]
+    pub groups: MetricsGroupsConfig,
+    #[serde(default)]
+    pub disk: MetricsDiskConfig,
+    #[serde(default)]
+    pub network: MetricsNetworkConfig,
+}
+
+impl Default for MetricsConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            collection_interval_secs: default_collection_interval(),
+            aggregation_interval: default_aggregation_interval(),
+            groups: MetricsGroupsConfig::default(),
+            disk: MetricsDiskConfig::default(),
+            network: MetricsNetworkConfig::default(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct MetricsGroupsConfig {
+    #[serde(default = "default_true")]
+    pub cpu: bool,
+    #[serde(default = "default_true")]
+    pub memory: bool,
+    #[serde(default = "default_true")]
+    pub disk: bool,
+    #[serde(default = "default_true")]
+    pub network: bool,
+    #[serde(default = "default_true")]
+    pub system: bool,
+}
+
+impl Default for MetricsGroupsConfig {
+    fn default() -> Self {
+        Self { cpu: true, memory: true, disk: true, network: true, system: true }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct MetricsDiskConfig {
+    /// Mount points to report disk space for. Defaults to root only.
+    #[serde(default = "default_mount_points")]
+    pub mount_points: Vec<String>,
+}
+
+impl Default for MetricsDiskConfig {
+    fn default() -> Self {
+        Self { mount_points: default_mount_points() }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct MetricsNetworkConfig {
+    /// Interfaces to report. Empty list = auto-detect all non-loopback interfaces.
+    #[serde(default)]
+    pub interfaces: Vec<String>,
+}
+
+impl Default for MetricsNetworkConfig {
+    fn default() -> Self {
+        Self { interfaces: vec![] }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -84,6 +170,14 @@ impl Config {
         if self.buffer.disk_max_size_mb == 0 {
             anyhow::bail!("buffer.disk_max_size_mb must be > 0");
         }
+        if self.metrics.enabled {
+            if self.metrics.collection_interval_secs == 0 {
+                anyhow::bail!("metrics.collection_interval_secs must be > 0");
+            }
+            if !matches!(self.metrics.aggregation_interval.as_str(), "none" | "1m" | "1h" | "1d") {
+                anyhow::bail!("metrics.aggregation_interval must be one of: none, 1m, 1h, 1d");
+            }
+        }
         Ok(())
     }
 }
@@ -126,4 +220,13 @@ fn default_disk_max_size_mb() -> u64 {
 }
 fn default_disk_chunk_max_entries() -> usize {
     200
+}
+fn default_collection_interval() -> u64 {
+    10
+}
+fn default_aggregation_interval() -> String {
+    "1m".to_string()
+}
+fn default_mount_points() -> Vec<String> {
+    vec!["/".to_string()]
 }
