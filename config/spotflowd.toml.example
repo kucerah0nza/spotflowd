@@ -1,0 +1,40 @@
+# spotflowd configuration file
+# Default location: /etc/spotflow/spotflowd.toml
+
+[device]
+# Unique identifier for this device on the Spotflow platform.
+id = "my-device-001"
+# Ingest key obtained from the Spotflow dashboard.
+ingest_key = "sk_..."
+
+[mqtt]
+# Spotflow MQTT broker (default: mqtt.spotflow.io).
+broker = "mqtt.spotflow.io"
+# TLS port (default: 8883).
+port = 8883
+# MQTT keep-alive interval in seconds (default: 60).
+keepalive_secs = 60
+
+[sources]
+# Collect logs from systemd journal (requires journald feature, default: true).
+journald = true
+# Collect logs by tailing a syslog file (default: true).
+syslog = true
+# Path to the syslog file. Defaults to /var/log/syslog on Debian/Ubuntu
+# or /var/log/messages on RHEL/Yocto systems.
+syslog_path = "/var/log/syslog"
+
+[buffer]
+# Maximum number of log entries held in memory.
+# When this limit is reached, entries are flushed to a disk chunk.
+memory_max_entries = 1000
+
+# Directory for on-disk spool chunk files.
+disk_path = "/var/lib/spotflow/spool"
+
+# Maximum total size of the disk spool in megabytes.
+# When reached, the oldest chunk files are dropped to make room.
+disk_max_size_mb = 64
+
+# Number of log entries per disk chunk file.
+disk_chunk_max_entries = 200

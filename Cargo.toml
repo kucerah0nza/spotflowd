@@ -1,0 +1,53 @@
+[package]
+name = "spotflowd"
+version = "0.1.0"
+edition = "2021"
+description = "Spotflow observability daemon for Linux — collects logs and sends them to the Spotflow platform"
+license = "BSL-1.1"
+repository = "https://github.com/spotflow-io/spotflowd"
+
+[[bin]]
+name = "spotflowd"
+path = "src/main.rs"
+
+[dependencies]
+# Async runtime
+tokio = { version = "1", features = ["full"] }
+
+# MQTT client (rumqttc with rustls TLS)
+rumqttc = { version = "0.24", default-features = false, features = ["use-rustls"] }
+
+# TLS
+rustls = { version = "0.23", default-features = false, features = ["ring"] }
+webpki-roots = "0.26"
+
+# CBOR encoding
+ciborium = "0.2"
+
+# Config parsing
+serde = { version = "1", features = ["derive"] }
+toml = "0.8"
+
+# Journald (optional — not available on all targets)
+systemd = { version = "0.10", optional = true }
+
+# Daemon's own logging → stderr / journald
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Error handling
+anyhow = "1"
+thiserror = "1"
+
+# Time
+chrono = "0.4"
+
+[features]
+default = ["journald"]
+journald = ["dep:systemd"]
+
+[profile.release]
+opt-level = "z"     # optimize for size (important for embedded targets)
+lto = true
+codegen-units = 1
+strip = true

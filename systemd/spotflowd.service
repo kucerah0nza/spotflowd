@@ -1,0 +1,34 @@
+[Unit]
+Description=Spotflow observability daemon
+Documentation=https://github.com/spotflow-io/spotflowd
+After=network-online.target
+Wants=network-online.target
+# Start after journald is available (when journald source is enabled).
+After=systemd-journald.service
+
+[Service]
+Type=simple
+ExecStart=/usr/sbin/spotflowd /etc/spotflow/spotflowd.toml
+Restart=on-failure
+RestartSec=5s
+
+# Run as a dedicated user for least privilege.
+User=spotflow
+Group=spotflow
+
+# Allow reading the journal.
+SupplementaryGroups=systemd-journal adm
+
+# State directory for the disk spool.
+StateDirectory=spotflow
+StateDirectoryMode=0750
+
+# Hardening
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/spotflow
+
+[Install]
+WantedBy=multi-user.target
