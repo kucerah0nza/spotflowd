@@ -8,7 +8,7 @@ use crate::log_entry::{LogEntry, Severity};
 use anyhow::Result;
 use std::time::Duration;
 use tokio::sync::mpsc;
-use tracing::warn;
+use tracing::{debug, warn};
 
 pub async fn run(tx: mpsc::Sender<LogEntry>) -> Result<()> {
     tokio::task::spawn_blocking(move || run_blocking(tx)).await??;
@@ -18,7 +18,11 @@ pub async fn run(tx: mpsc::Sender<LogEntry>) -> Result<()> {
 fn run_blocking(tx: mpsc::Sender<LogEntry>) -> Result<()> {
     use systemd::journal::{JournalSeek, OpenOptions};
 
+    // Explicitly open the system journal so we see entries from all users
+    // and services, not just the spotflow service account's own journal.
     let mut journal = OpenOptions::default()
+        .system(true)
+        .current_user(false)
         .open()
         .map_err(|e| anyhow::anyhow!("failed to open journald: {e}"))?;
 
@@ -31,6 +35,7 @@ fn run_blocking(tx: mpsc::Sender<LogEntry>) -> Result<()> {
         match journal.next_entry() {
             Ok(Some(entry)) => {
                 if let Some(log_entry) = entry_to_log(&entry) {
+                    debug!("journald entry: {:?}", log_entry.body);
                     if tx.blocking_send(log_entry).is_err() {
                         // Receiver dropped — orchestrator is shutting down.
                         break;

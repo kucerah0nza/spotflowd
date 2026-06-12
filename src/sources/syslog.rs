@@ -13,7 +13,7 @@ use std::io::{BufRead, BufReader, Seek, SeekFrom};
 use std::path::PathBuf;
 use std::time::Duration;
 use tokio::sync::mpsc;
-use tracing::{debug, warn};
+use tracing::{debug, info, warn};
 
 pub async fn run(path: PathBuf, tx: mpsc::Sender<LogEntry>) -> Result<()> {
     tokio::task::spawn_blocking(move || run_blocking(path, tx)).await??;
@@ -24,6 +24,7 @@ fn run_blocking(path: PathBuf, tx: mpsc::Sender<LogEntry>) -> Result<()> {
     // Persistent BufReader so partial lines at EOF are retained in its internal
     // buffer until the next read_line call — avoids silently dropping tails.
     let file = open_and_seek_end(&path)?;
+    info!("syslog source tailing {}", path.display());
     let mut reader = BufReader::new(file);
     let mut current_inode = inode_of(&path);
 
@@ -50,6 +51,7 @@ fn run_blocking(path: PathBuf, tx: mpsc::Sender<LogEntry>) -> Result<()> {
             Ok(_) => {
                 let trimmed = line.trim_end_matches('\n').trim_end_matches('\r');
                 if !trimmed.is_empty() {
+                    debug!("syslog entry: {}", trimmed);
                     let entry = parse_line(trimmed);
                     if tx.blocking_send(entry).is_err() {
                         return Ok(()); // Orchestrator shut down.
