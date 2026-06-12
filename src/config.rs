@@ -19,7 +19,7 @@ pub struct Config {
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct MetricsConfig {
-    /// Set to true to enable the metrics subsystem.
+    /// Set to true to enable OS metrics collection (cpu, memory, disk, network, system).
     #[serde(default)]
     pub enabled: bool,
     /// How often to read /proc and /sys (seconds).
@@ -36,6 +36,9 @@ pub struct MetricsConfig {
     pub disk: MetricsDiskConfig,
     #[serde(default)]
     pub network: MetricsNetworkConfig,
+    /// Custom application metrics via Unix domain socket.
+    #[serde(default)]
+    pub custom: MetricsCustomConfig,
 }
 
 impl Default for MetricsConfig {
@@ -47,7 +50,25 @@ impl Default for MetricsConfig {
             groups: MetricsGroupsConfig::default(),
             disk: MetricsDiskConfig::default(),
             network: MetricsNetworkConfig::default(),
+            custom: MetricsCustomConfig::default(),
         }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct MetricsCustomConfig {
+    /// Set to true to open the Unix socket and accept custom metrics.
+    /// Independent of `enabled` — custom metrics work without OS metrics.
+    #[serde(default)]
+    pub enabled: bool,
+    /// Path to the Unix domain socket. Default: /run/spotflow/metrics.sock
+    #[serde(default = "default_custom_socket_path")]
+    pub socket_path: PathBuf,
+}
+
+impl Default for MetricsCustomConfig {
+    fn default() -> Self {
+        Self { enabled: false, socket_path: default_custom_socket_path() }
     }
 }
 
@@ -182,7 +203,7 @@ impl Config {
         if self.logs.buffer.disk_max_size_mb == 0 {
             anyhow::bail!("logs.buffer.disk_max_size_mb must be > 0");
         }
-        if self.metrics.enabled {
+        if self.metrics.enabled || self.metrics.custom.enabled {
             if self.metrics.collection_interval_secs == 0 {
                 anyhow::bail!("metrics.collection_interval_secs must be > 0");
             }
@@ -241,4 +262,7 @@ fn default_aggregation_interval() -> String {
 }
 fn default_mount_points() -> Vec<String> {
     vec!["/".to_string()]
+}
+fn default_custom_socket_path() -> PathBuf {
+    PathBuf::from("/run/spotflow/metrics.sock")
 }

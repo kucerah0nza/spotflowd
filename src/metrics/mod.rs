@@ -18,12 +18,13 @@
 pub mod aggregator;
 pub mod collector;
 pub mod publisher;
+pub mod socket;
 
 use crate::config::MetricsConfig;
 use crate::mqtt::MqttPublisher;
 use anyhow::Result;
 use std::path::PathBuf;
-use tokio::sync::watch;
+use tokio::sync::{mpsc, watch};
 use tokio::time::{interval, Duration, MissedTickBehavior};
 use tracing::{debug, warn};
 
@@ -55,21 +56,22 @@ impl MetricValue {
     }
 }
 
-/// A single sample produced by the collector on each tick.
+/// A single sample produced by the collector or a custom app on each tick.
 #[derive(Debug, Clone)]
 pub struct MetricSample {
-    pub name: &'static str,
+    /// Metric name. Owned so custom apps can supply dynamic names.
+    pub name: String,
     pub value: MetricValue,
-    /// Sorted by key for consistent stream-key generation.
-    pub labels: Vec<(&'static str, String)>,
+    /// (key, value) pairs. Sorted by key for consistent stream-key generation.
+    pub labels: Vec<(String, String)>,
 }
 
 /// A metric ready to publish — either raw (agg=none) or fully aggregated.
 #[derive(Debug)]
 pub struct ReadyMetric {
-    pub name: &'static str,
+    pub name: String,
     pub agg_cbor: u8,
-    pub labels: Vec<(&'static str, String)>,
+    pub labels: Vec<(String, String)>,
     /// Always present (raw value for NONE, aggregated sum otherwise).
     pub sum: f64,
     /// None for AGG_NONE — omit count/min/max from payload per spec.
@@ -102,6 +104,20 @@ pub async fn run(
     let mut ticker = interval(Duration::from_secs(cfg.collection_interval_secs));
     ticker.set_missed_tick_behavior(MissedTickBehavior::Skip);
 
+    // Spawn the custom metrics socket listener if enabled.
+    let mut custom_rx: Option<mpsc::Receiver<MetricSample>> = None;
+    if cfg.custom.enabled {
+        let (tx, rx) = mpsc::channel::<MetricSample>(1024);
+        custom_rx = Some(rx);
+        let custom_cfg = cfg.custom.clone();
+        let shutdown_rx = shutdown.clone();
+        tokio::spawn(async move {
+            if let Err(e) = socket::run(custom_cfg, tx, shutdown_rx).await {
+                warn!("custom metrics socket failed: {e}");
+            }
+        });
+    }
+
     // B1: buffer ready metrics across ticks so aggregated windows survive disconnects.
     let mut pending: Vec<ReadyMetric> = Vec::new();
     // I1: track last save time to throttle disk writes.
@@ -111,7 +127,20 @@ pub async fn run(
     loop {
         tokio::select! {
             _ = ticker.tick() => {
-                let (samples, uptime_ms) = coll.collect(&cfg);
+                // Collect OS metrics (if enabled) and read current uptime.
+                let (mut samples, uptime_ms) = if cfg.enabled {
+                    coll.collect(&cfg)
+                } else {
+                    (Vec::new(), collector::read_uptime_ms())
+                };
+
+                // Drain any custom metrics that arrived since the last tick.
+                if let Some(ref mut rx) = custom_rx {
+                    while let Ok(s) = rx.try_recv() {
+                        samples.push(s);
+                    }
+                }
+
                 let mut ready = agg.ingest(samples, uptime_ms);
                 pending.append(&mut ready);
 

@@ -37,7 +37,7 @@ fn encode_metric(m: &ReadyMetric) -> Result<Vec<u8>> {
     if !m.labels.is_empty() {
         let label_map: Vec<(CborValue, CborValue)> = m.labels
             .iter()
-            .map(|(k, v)| (CborValue::Text(k.to_string()), CborValue::Text(v.clone())))
+            .map(|(k, v)| (CborValue::Text(k.clone()), CborValue::Text(v.clone())))
             .collect();
         map.push((CborValue::Integer(5u64.into()), CborValue::Map(label_map)));
     }

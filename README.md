@@ -152,10 +152,11 @@ See [`config/spotflowd.toml.example`](config/spotflowd.toml.example) for all opt
 | `[mqtt]` | Broker address, port, keep-alive |
 | `[logs]` | Log source selection (journald, syslog) |
 | `[logs.buffer]` | Memory and disk spool settings |
-| `[metrics]` | Metrics collection toggle, intervals |
+| `[metrics]` | OS metrics collection toggle, intervals |
 | `[metrics.groups]` | Enable / disable individual metric groups |
 | `[metrics.disk]` | Mount points to report |
 | `[metrics.network]` | Network interfaces to report |
+| `[metrics.custom]` | Custom app metrics via Unix socket |
 
 ### Minimal config
 
@@ -195,6 +196,68 @@ Disable a group to reduce traffic on constrained devices:
 disk    = false
 network = false
 ```
+
+### Custom application metrics
+
+Any process on the same machine can publish custom metrics to Spotflow without
+depending on this codebase. Enable the socket listener:
+
+```toml
+[metrics.custom]
+enabled = true
+socket_path = "/run/spotflow/metrics.sock"   # default
+```
+
+The socket accepts **newline-delimited JSON**. Each line is one metric:
+
+```json
+{"name": "queue_depth", "value": 42}
+{"name": "job_duration_ms", "value": 183.5, "labels": {"worker": "main"}}
+```
+
+Connect, send one or more lines, then close. No response is sent back.
+
+**Shell (one-liner):**
+```bash
+echo '{"name":"queue_depth","value":42}' | nc -U /run/spotflow/metrics.sock
+```
+
+**Python:**
+```python
+import socket, json
+
+def send_metric(name, value, labels=None):
+    msg = {"name": name, "value": value}
+    if labels:
+        msg["labels"] = labels
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
+        s.connect("/run/spotflow/metrics.sock")
+        s.sendall(json.dumps(msg).encode() + b"\n")
+
+send_metric("queue_depth", 42)
+send_metric("job_duration_ms", 183.5, {"worker": "main"})
+```
+
+**C:**
+```c
+#include <stdio.h>
+#include <sys/socket.h>
+#include <sys/un.h>
+#include <unistd.h>
+
+void send_metric(const char *name, double value) {
+    int fd = socket(AF_UNIX, SOCK_STREAM, 0);
+    struct sockaddr_un addr = {.sun_family = AF_UNIX};
+    snprintf(addr.sun_path, sizeof(addr.sun_path), "/run/spotflow/metrics.sock");
+    connect(fd, (struct sockaddr *)&addr, sizeof(addr));
+    dprintf(fd, "{\"name\":\"%s\",\"value\":%g}\n", name, value);
+    close(fd);
+}
+```
+
+Custom metrics flow through the same aggregator as OS metrics and respect the
+configured `aggregation_interval`. `[metrics.custom]` is independent of
+`[metrics] enabled` — custom metrics work without OS metrics enabled.
 
 ## Log verbosity
 

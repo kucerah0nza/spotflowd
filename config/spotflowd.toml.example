@@ -70,3 +70,10 @@ mount_points = ["/"]
 [metrics.network]
 # Interfaces to report. Empty = auto-detect all non-loopback interfaces.
 interfaces = []
+
+[metrics.custom]
+# Accept custom metrics from local applications via a Unix domain socket.
+# Independent of [metrics] enabled — works without OS metrics.
+enabled = false
+# Path to the Unix socket. Any local process can connect and send metrics.
+socket_path = "/run/spotflow/metrics.sock"

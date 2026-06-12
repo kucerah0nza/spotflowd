@@ -230,7 +230,7 @@ fn collect_system(out: &mut Vec<MetricSample>, uptime_ms: u64) {
 // /proc and /sys readers
 // ---------------------------------------------------------------------------
 
-fn read_uptime_ms() -> u64 {
+pub fn read_uptime_ms() -> u64 {
     std::fs::read_to_string("/proc/uptime")
         .ok()
         .and_then(|s| s.split_ascii_whitespace().next().and_then(|v| v.parse::<f64>().ok()))
@@ -409,5 +409,9 @@ fn read_process_count() -> Option<u32> {
 // ---------------------------------------------------------------------------
 
 fn sample(name: &'static str, value: MetricValue, labels: &[(&'static str, String)]) -> MetricSample {
-    MetricSample { name, value, labels: labels.to_vec() }
+    MetricSample {
+        name: name.to_string(),
+        value,
+        labels: labels.iter().map(|(k, v)| (k.to_string(), v.clone())).collect(),
+    }
 }

@@ -26,8 +26,8 @@ use tracing::debug;
 // ---------------------------------------------------------------------------
 
 struct StreamState {
-    name: &'static str,
-    labels: Vec<(&'static str, String)>,
+    name: String,
+    labels: Vec<(String, String)>,
     sum: f64,
     count: u64,
     min: f64,
@@ -37,7 +37,7 @@ struct StreamState {
 }
 
 impl StreamState {
-    fn new(name: &'static str, labels: Vec<(&'static str, String)>, v: f64, uptime_ms: u64) -> Self {
+    fn new(name: String, labels: Vec<(String, String)>, v: f64, uptime_ms: u64) -> Self {
         Self { name, labels, sum: v, count: 1, min: v, max: v, window_start: Instant::now(), uptime_ms }
     }
 
@@ -82,7 +82,7 @@ impl Aggregator {
         let mut ready = Vec::new();
 
         for s in samples {
-            let key = stream_key(s.name, &s.labels);
+            let key = stream_key(&s.name, &s.labels);
             let v = s.value.as_f64();
 
             if self.agg_duration.is_none() {
@@ -176,13 +176,13 @@ impl Aggregator {
 // Stream key: "name" or "name|k=v|k=v" (labels assumed sorted by caller)
 // ---------------------------------------------------------------------------
 
-fn stream_key(name: &str, labels: &[(&str, String)]) -> String {
+fn stream_key(name: &str, labels: &[(String, String)]) -> String {
     if labels.is_empty() {
         return name.to_string();
     }
     // M1: sort by key here so callers don't need to guarantee ordering.
     let mut sorted: Vec<_> = labels.iter().collect();
-    sorted.sort_by_key(|(k, _)| *k);
+    sorted.sort_by_key(|(k, _)| k.as_str());
     let label_str = sorted
         .iter()
         .map(|(k, v)| format!("{k}={v}"))

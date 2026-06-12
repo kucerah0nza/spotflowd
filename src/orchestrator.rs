@@ -51,7 +51,7 @@ pub async fn run(
         });
     }
 
-    if cfg.metrics.enabled {
+    if cfg.metrics.enabled || cfg.metrics.custom.enabled {
         let metrics_cfg = cfg.metrics.clone();
         let seq_dir = cfg.logs.buffer.disk_path.clone();
         let publisher_clone = publisher.clone();
