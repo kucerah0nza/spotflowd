@@ -2,7 +2,7 @@
 
 Linux observability daemon for the [Spotflow](https://spotflow.io) platform.
 
-Collects logs from `journald` and syslog, buffers them locally, and streams them to Spotflow over a persistent MQTT/TLS connection.
+Collects **logs** (journald, syslog) and **OS metrics** (CPU, memory, disk, network), buffers them locally, and streams them to Spotflow over a persistent MQTT/TLS connection.
 
 ## How it works
 
@@ -10,11 +10,14 @@ Collects logs from `journald` and syslog, buffers them locally, and streams them
 journald ──┐
            ├──▶  memory buffer  ──▶  disk spool (on overflow)  ──▶  MQTT → Spotflow
 syslog  ───┘
+
+/proc, /sys ───▶  aggregator  ──▶  MQTT → Spotflow
 ```
 
-- **Memory-first buffer** — entries are held in RAM (configurable size) to minimise flash writes on embedded targets.
-- **Disk spool** — when memory is full, entries are flushed to disk in chunks. Oldest chunks are dropped when the spool size limit is reached.
+- **Memory-first buffer** — log entries are held in RAM (configurable size) to minimise flash writes on embedded targets.
+- **Disk spool** — when memory is full, entries are flushed to disk in CBOR chunks. Oldest chunks are dropped when the spool size limit is reached.
 - **Publish order** — when connectivity is restored, the newest data is sent first (memory), then older backlog (disk, newest chunk first).
+- **Metrics aggregation** — OS samples are collected on a configurable interval and accumulated (sum / count / min / max) before uploading. Aggregation windows: `none`, `1m`, `1h`, `1d`.
 - **Persistent MQTT connection** — single TLS connection to `mqtt.spotflow.io:8883`; reconnects automatically on failure.
 
 ## Installation
@@ -141,7 +144,22 @@ spotflowd /path/to/config.toml
 
 See [`config/spotflowd.toml.example`](config/spotflowd.toml.example) for all options with descriptions.
 
+### Config structure
+
+| Section | Description |
+|---|---|
+| `[device]` | Device ID and ingest key (**required**) |
+| `[mqtt]` | Broker address, port, keep-alive |
+| `[logs]` | Log source selection (journald, syslog) |
+| `[logs.buffer]` | Memory and disk spool settings |
+| `[metrics]` | Metrics collection toggle, intervals |
+| `[metrics.groups]` | Enable / disable individual metric groups |
+| `[metrics.disk]` | Mount points to report |
+| `[metrics.network]` | Network interfaces to report |
+
 ### Minimal config
+
+Only `[device]` is required — all other sections have sensible defaults:
 
 ```toml
 [device]
@@ -149,7 +167,34 @@ id = "my-device-001"
 ingest_key = "sk_..."
 ```
 
-All other settings have sensible defaults.
+### Enabling metrics
+
+Set `enabled = true` under `[metrics]`:
+
+```toml
+[metrics]
+enabled = true
+collection_interval_secs = 10   # how often to read /proc and /sys
+aggregation_interval = "1m"     # upload window: none | 1m | 1h | 1d
+```
+
+Metric groups (all enabled by default):
+
+| Group | Metrics |
+|---|---|
+| `cpu` | `cpu_usage_percent`, `cpu_load_avg_1m/5m/15m`, `cpu_temperature` |
+| `memory` | `mem_available_bytes`, `mem_used_percent`, `swap_used_percent` |
+| `disk` | `disk_free_bytes`, `disk_used_percent`, `disk_read_bytes`, `disk_write_bytes` |
+| `network` | `net_rx_bytes`, `net_tx_bytes`, `net_rx_errors`, `net_tx_errors` |
+| `system` | `uptime_seconds`, `process_count` |
+
+Disable a group to reduce traffic on constrained devices:
+
+```toml
+[metrics.groups]
+disk    = false
+network = false
+```
 
 ## Log verbosity
 
@@ -180,12 +225,13 @@ cargo build --release --no-default-features
 | `/var/log/syslog: permission denied` | Insufficient permissions | Run as root or add user to `adm` group |
 | `failed to open journald` | Missing `libsystemd-dev` | `apt-get install libsystemd-dev` |
 | Syslog file not found | `rsyslog` not installed | `apt-get install rsyslog` |
-| No logs in Spotflow dashboard | Both sources disabled in config | Set `journald = true` or `syslog = true` |
-| Duplicate log entries in dashboard | Both `journald` and `syslog` enabled on systemd | Disable syslog: `syslog = false` (default on systemd builds) |
+| No logs in Spotflow dashboard | Both log sources disabled | Set `journald = true` or `syslog = true` under `[logs]` |
+| Duplicate log entries | Both `journald` and `syslog` enabled on systemd | Set `syslog = false` under `[logs]` (default on systemd builds) |
+| No metrics in dashboard | Metrics not enabled | Set `enabled = true` under `[metrics]` and restart |
+| Metrics appear with gaps | MQTT was offline at aggregation window boundary | Expected — buffered metrics are retried on reconnect; raw samples during the outage are lost |
 
 ## Roadmap
 
-- [ ] Metrics (CPU, memory, custom gauges)
 - [ ] Crash dump collection
 - [ ] Remote log-level control via MQTT
 - [ ] Snap package (Ubuntu Core)
