@@ -1,30 +1,29 @@
 //! Orchestrator — wires sources → buffer → MQTT publisher.
-//!
-//! Responsibilities:
-//! - Start log source tasks (journald, syslog).
-//! - Receive log entries from sources via an mpsc channel.
-//! - Write entries into the two-tier buffer.
-//! - Run the publish loop: drain memory first (newest), then disk chunks
-//!   newest-first, when MQTT is connected.
-//! - On shutdown: flush in-memory buffer to disk before exiting.
 
 use crate::buffer::Buffer;
 use crate::config::Config;
 use crate::log_entry::LogEntry;
 use crate::mqtt::MqttPublisher;
 use anyhow::Result;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tokio::sync::{mpsc, Mutex};
 use tokio::time::{sleep, Duration};
 use tracing::{error, info, warn};
 
-/// How many entries to publish in a single MQTT message.
 const PUBLISH_BATCH_SIZE: usize = 200;
-/// How long to wait between publish loop iterations when there is nothing to send.
 const IDLE_SLEEP_MS: u64 = 200;
 
-pub async fn run(cfg: Config, publisher: MqttPublisher, shutdown: tokio::sync::watch::Receiver<bool>) -> Result<()> {
+pub async fn run(
+    cfg: Config,
+    publisher: MqttPublisher,
+    shutdown: tokio::sync::watch::Receiver<bool>,
+) -> Result<()> {
     let (tx, mut rx) = mpsc::channel::<LogEntry>(4096);
+
+    // Shared flag passed into spawn_blocking threads so they exit immediately
+    // on shutdown, before the Tokio runtime tries to wait for them.
+    let shutdown_threads = Arc::new(AtomicBool::new(false));
 
     // -----------------------------------------------------------------------
     // Start sources
@@ -33,8 +32,9 @@ pub async fn run(cfg: Config, publisher: MqttPublisher, shutdown: tokio::sync::w
     #[cfg(feature = "journald")]
     if cfg.sources.journald {
         let tx2 = tx.clone();
+        let flag = shutdown_threads.clone();
         tokio::spawn(async move {
-            if let Err(e) = crate::sources::journald::run(tx2).await {
+            if let Err(e) = crate::sources::journald::run(tx2, flag).await {
                 error!("journald source failed: {e}");
             }
         });
@@ -43,23 +43,23 @@ pub async fn run(cfg: Config, publisher: MqttPublisher, shutdown: tokio::sync::w
     if cfg.sources.syslog {
         let tx2 = tx.clone();
         let path = cfg.sources.syslog_path.clone();
+        let flag = shutdown_threads.clone();
         tokio::spawn(async move {
-            if let Err(e) = crate::sources::syslog::run(path, tx2).await {
+            if let Err(e) = crate::sources::syslog::run(path, tx2, flag).await {
                 error!("syslog source failed: {e}");
             }
         });
     }
 
-    // Drop the original sender so the channel closes when all source tasks end.
     drop(tx);
 
     // -----------------------------------------------------------------------
-    // Buffer (shared between ingestion task and publish loop)
+    // Buffer
     // -----------------------------------------------------------------------
     let buffer = Arc::new(Mutex::new(Buffer::new(cfg.buffer.clone())));
 
     // -----------------------------------------------------------------------
-    // Ingestion task: drain the mpsc channel into the buffer
+    // Ingestion task
     // -----------------------------------------------------------------------
     {
         let buffer = buffer.clone();
@@ -75,7 +75,7 @@ pub async fn run(cfg: Config, publisher: MqttPublisher, shutdown: tokio::sync::w
                                     error!("buffer push error: {err}");
                                 }
                             }
-                            None => break, // all sources closed
+                            None => break,
                         }
                     }
                     _ = shutdown_rx.changed() => break,
@@ -93,6 +93,8 @@ pub async fn run(cfg: Config, publisher: MqttPublisher, shutdown: tokio::sync::w
         tokio::select! {
             _ = shutdown_rx.changed() => {
                 info!("shutdown signal received, flushing buffer to disk...");
+                // Tell blocking source threads to exit before the runtime drops.
+                shutdown_threads.store(true, Ordering::Relaxed);
                 let mut buf = buffer.lock().await;
                 if let Err(e) = buf.flush_memory_to_disk() {
                     warn!("flush on shutdown failed: {e}");
@@ -107,14 +109,13 @@ pub async fn run(cfg: Config, publisher: MqttPublisher, shutdown: tokio::sync::w
     Ok(())
 }
 
-/// One iteration of the publish loop.
 async fn publish_tick(publisher: &MqttPublisher, buffer: &Arc<Mutex<Buffer>>) {
     if !publisher.is_connected() {
         sleep(Duration::from_millis(IDLE_SLEEP_MS)).await;
         return;
     }
 
-    // --- Memory first (newest data) ---
+    // Memory first (newest data).
     let memory_entries = {
         let mut buf = buffer.lock().await;
         if buf.memory_len() > 0 {
@@ -125,11 +126,9 @@ async fn publish_tick(publisher: &MqttPublisher, buffer: &Arc<Mutex<Buffer>>) {
     };
 
     if !memory_entries.is_empty() {
-        // Publish in batches of PUBLISH_BATCH_SIZE.
         for chunk in memory_entries.chunks(PUBLISH_BATCH_SIZE) {
             if let Err(e) = publisher.publish_batch(chunk).await {
                 warn!("publish error (memory batch): {e}");
-                // Re-insert failed entries back into the buffer.
                 let mut buf = buffer.lock().await;
                 for entry in chunk {
                     let _ = buf.push(entry.clone());
@@ -138,10 +137,10 @@ async fn publish_tick(publisher: &MqttPublisher, buffer: &Arc<Mutex<Buffer>>) {
                 return;
             }
         }
-        return; // Prioritise memory; check again next tick before touching disk.
+        return;
     }
 
-    // --- Disk next (older data, newest chunk first) ---
+    // Disk next (older data, newest chunk first).
     let next_chunk = {
         let buf = buffer.lock().await;
         match buf.next_disk_chunk() {
@@ -178,6 +177,5 @@ async fn publish_tick(publisher: &MqttPublisher, buffer: &Arc<Mutex<Buffer>>) {
         return;
     }
 
-    // Nothing to publish — idle.
     sleep(Duration::from_millis(IDLE_SLEEP_MS)).await;
 }

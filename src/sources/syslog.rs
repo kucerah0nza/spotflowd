@@ -11,31 +11,31 @@ use crate::log_entry::{LogEntry, Severity};
 use anyhow::Result;
 use std::io::{BufRead, BufReader, Seek, SeekFrom};
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc;
 use tracing::{debug, info, warn};
 
-pub async fn run(path: PathBuf, tx: mpsc::Sender<LogEntry>) -> Result<()> {
-    tokio::task::spawn_blocking(move || run_blocking(path, tx)).await??;
+pub async fn run(path: PathBuf, tx: mpsc::Sender<LogEntry>, shutdown: Arc<AtomicBool>) -> Result<()> {
+    tokio::task::spawn_blocking(move || run_blocking(path, tx, shutdown)).await??;
     Ok(())
 }
 
-fn run_blocking(path: PathBuf, tx: mpsc::Sender<LogEntry>) -> Result<()> {
-    // Persistent BufReader so partial lines at EOF are retained in its internal
-    // buffer until the next read_line call — avoids silently dropping tails.
+fn run_blocking(path: PathBuf, tx: mpsc::Sender<LogEntry>, shutdown: Arc<AtomicBool>) -> Result<()> {
     let file = open_and_seek_end(&path)?;
     info!("syslog source tailing {}", path.display());
     let mut reader = BufReader::new(file);
     let mut current_inode = inode_of(&path);
 
     loop {
+        if shutdown.load(Ordering::Relaxed) {
+            break;
+        }
         let mut line = String::new();
         match reader.read_line(&mut line) {
             Ok(0) => {
-                // EOF — no new data yet; poll again after a short sleep.
                 std::thread::sleep(Duration::from_millis(200));
-
-                // Detect log rotation: inode changed means the file was replaced.
                 let new_inode = inode_of(&path);
                 if new_inode != current_inode {
                     debug!("syslog file rotated, reopening {}", path.display());
@@ -54,7 +54,7 @@ fn run_blocking(path: PathBuf, tx: mpsc::Sender<LogEntry>) -> Result<()> {
                     debug!("syslog entry: {}", trimmed);
                     let entry = parse_line(trimmed);
                     if tx.blocking_send(entry).is_err() {
-                        return Ok(()); // Orchestrator shut down.
+                        break;
                     }
                 }
             }
@@ -64,6 +64,7 @@ fn run_blocking(path: PathBuf, tx: mpsc::Sender<LogEntry>) -> Result<()> {
             }
         }
     }
+    Ok(())
 }
 
 fn open_and_seek_end(path: &PathBuf) -> Result<std::fs::File> {

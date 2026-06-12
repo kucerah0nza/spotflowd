@@ -11,6 +11,7 @@ Type=simple
 ExecStart=/usr/sbin/spotflowd /etc/spotflow/spotflowd.toml
 Restart=on-failure
 RestartSec=5s
+TimeoutStopSec=5s
 
 # Run as a dedicated user for least privilege.
 User=spotflow

@@ -6,44 +6,44 @@
 
 use crate::log_entry::{LogEntry, Severity};
 use anyhow::Result;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc;
 use tracing::{debug, warn};
 
-pub async fn run(tx: mpsc::Sender<LogEntry>) -> Result<()> {
-    tokio::task::spawn_blocking(move || run_blocking(tx)).await??;
+pub async fn run(tx: mpsc::Sender<LogEntry>, shutdown: Arc<AtomicBool>) -> Result<()> {
+    tokio::task::spawn_blocking(move || run_blocking(tx, shutdown)).await??;
     Ok(())
 }
 
-fn run_blocking(tx: mpsc::Sender<LogEntry>) -> Result<()> {
+fn run_blocking(tx: mpsc::Sender<LogEntry>, shutdown: Arc<AtomicBool>) -> Result<()> {
     use systemd::journal::{JournalSeek, OpenOptions};
 
-    // Explicitly open the system journal so we see entries from all users
-    // and services, not just the spotflow service account's own journal.
     let mut journal = OpenOptions::default()
         .system(true)
         .current_user(false)
         .open()
         .map_err(|e| anyhow::anyhow!("failed to open journald: {e}"))?;
 
-    // Start from the current tail — don't replay historical entries.
     journal
         .seek(JournalSeek::Tail)
         .map_err(|e| anyhow::anyhow!("journal seek failed: {e}"))?;
 
     loop {
+        if shutdown.load(Ordering::Relaxed) {
+            break;
+        }
         match journal.next_entry() {
             Ok(Some(entry)) => {
                 if let Some(log_entry) = entry_to_log(&entry) {
                     debug!("journald entry: {:?}", log_entry.body);
                     if tx.blocking_send(log_entry).is_err() {
-                        // Receiver dropped — orchestrator is shutting down.
                         break;
                     }
                 }
             }
             Ok(None) => {
-                // No new entries; wait up to 200 ms for more.
                 let _ = journal.wait(Some(Duration::from_millis(200)));
             }
             Err(e) => {
