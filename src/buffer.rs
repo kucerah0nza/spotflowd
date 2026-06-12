@@ -50,16 +50,26 @@ fn total_spool_bytes(dir: &Path) -> u64 {
 }
 
 fn next_chunk_path(dir: &Path) -> Result<PathBuf> {
-    // Sequence number = number of existing .cbor files + 1, zero-padded to 10 digits.
-    let count = if dir.exists() {
+    // Use max existing sequence number + 1 so deleting published chunks never
+    // causes a collision with chunks still on disk.
+    let max_seq = if dir.exists() {
         fs::read_dir(dir)?
             .filter_map(|e| e.ok())
-            .filter(|e| e.path().extension().and_then(|s| s.to_str()) == Some("cbor"))
-            .count()
+            .filter_map(|e| {
+                let p = e.path();
+                if p.extension().and_then(|s| s.to_str()) != Some("cbor") {
+                    return None;
+                }
+                p.file_stem()
+                    .and_then(|s| s.to_str())
+                    .and_then(|s| s.parse::<u64>().ok())
+            })
+            .max()
+            .unwrap_or(0)
     } else {
         0
     };
-    Ok(dir.join(format!("{:010}.cbor", count + 1)))
+    Ok(dir.join(format!("{:010}.cbor", max_seq + 1)))
 }
 
 fn drop_oldest_chunk(dir: &Path) -> Result<()> {
@@ -106,14 +116,16 @@ impl Buffer {
         Ok(())
     }
 
-    /// Flush all current in-memory entries to a disk chunk.
-    /// Called on: memory overflow, flush timer, graceful shutdown.
+    /// Flush all current in-memory entries to disk, split into chunks of
+    /// `disk_chunk_max_entries`. Called on memory overflow and graceful shutdown.
     pub fn flush_memory_to_disk(&mut self) -> Result<()> {
         if self.memory.is_empty() {
             return Ok(());
         }
         let entries: Vec<LogEntry> = self.memory.drain(..).collect();
-        self.write_chunk(&entries)?;
+        for chunk in entries.chunks(self.cfg.disk_chunk_max_entries) {
+            self.write_chunk(chunk)?;
+        }
         Ok(())
     }
 
@@ -176,5 +188,122 @@ impl Buffer {
 
     pub fn memory_len(&self) -> usize {
         self.memory.len()
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::log_entry::{LogEntry, Severity};
+    use std::collections::HashMap;
+    use tempfile::TempDir;
+
+    fn make_cfg(dir: &TempDir, memory_max: usize, chunk_max: usize) -> BufferConfig {
+        BufferConfig {
+            memory_max_entries: memory_max,
+            disk_path: dir.path().to_path_buf(),
+            disk_max_size_mb: 64,
+            disk_chunk_max_entries: chunk_max,
+        }
+    }
+
+    fn entry(body: &str) -> LogEntry {
+        LogEntry {
+            body: body.to_string(),
+            severity: None,
+            timestamp_ms: None,
+            uptime_ms: None,
+            source: "test".to_string(),
+            labels: HashMap::new(),
+        }
+    }
+
+    /// B1: sequence number must not reuse a number that was deleted.
+    #[test]
+    fn chunk_path_no_collision_after_delete() {
+        let dir = TempDir::new().unwrap();
+        let p = dir.path();
+        fs::write(p.join("0000000001.cbor"), b"x").unwrap();
+        fs::write(p.join("0000000002.cbor"), b"x").unwrap();
+        fs::remove_file(p.join("0000000001.cbor")).unwrap();
+        // Highest remaining = 2, so next must be 3.
+        let next = next_chunk_path(p).unwrap();
+        assert_eq!(next.file_name().unwrap(), "0000000003.cbor");
+    }
+
+    /// B2: flush must honour disk_chunk_max_entries.
+    #[test]
+    fn flush_splits_into_chunks() {
+        let dir = TempDir::new().unwrap();
+        // memory_max=100 so no auto-flush triggers; chunk_max=3
+        let cfg = make_cfg(&dir, 100, 3);
+        let mut buf = Buffer::new(cfg);
+        for i in 0..7 {
+            buf.memory.push_back(entry(&format!("msg{i}")));
+        }
+        buf.flush_memory_to_disk().unwrap();
+        assert_eq!(buf.memory_len(), 0);
+
+        let chunks = spool_files_newest_first(dir.path()).unwrap();
+        // ceil(7/3) = 3 chunks
+        assert_eq!(chunks.len(), 3);
+        let c1 = Buffer::read_chunk(&dir.path().join("0000000001.cbor")).unwrap();
+        assert_eq!(c1.len(), 3);
+        let c2 = Buffer::read_chunk(&dir.path().join("0000000002.cbor")).unwrap();
+        assert_eq!(c2.len(), 3);
+        let c3 = Buffer::read_chunk(&dir.path().join("0000000003.cbor")).unwrap();
+        assert_eq!(c3.len(), 1);
+    }
+
+    /// Memory overflow triggers a flush and new entries continue to accumulate.
+    #[test]
+    fn memory_overflow_flushes_to_disk() {
+        let dir = TempDir::new().unwrap();
+        let cfg = make_cfg(&dir, 3, 10);
+        let mut buf = Buffer::new(cfg);
+        buf.push(entry("a")).unwrap();
+        buf.push(entry("b")).unwrap();
+        buf.push(entry("c")).unwrap();
+        // len == memory_max == 3; next push triggers flush
+        buf.push(entry("d")).unwrap();
+
+        assert_eq!(buf.memory_len(), 1); // only "d" in memory
+        let chunk = buf.next_disk_chunk().unwrap().unwrap();
+        let entries = Buffer::read_chunk(&chunk).unwrap();
+        assert_eq!(entries.len(), 3);
+        assert_eq!(entries[0].body, "a");
+        assert_eq!(entries[2].body, "c");
+    }
+
+    /// Drain memory returns all entries and leaves memory empty.
+    #[test]
+    fn drain_memory_empties_buffer() {
+        let dir = TempDir::new().unwrap();
+        let cfg = make_cfg(&dir, 100, 10);
+        let mut buf = Buffer::new(cfg);
+        buf.push(entry("x")).unwrap();
+        buf.push(entry("y")).unwrap();
+        let drained = buf.drain_memory();
+        assert_eq!(drained.len(), 2);
+        assert_eq!(buf.memory_len(), 0);
+    }
+
+    /// Severity is correctly round-tripped through the disk spool.
+    #[test]
+    fn chunk_round_trips_severity() {
+        let dir = TempDir::new().unwrap();
+        let cfg = make_cfg(&dir, 100, 10);
+        let mut buf = Buffer::new(cfg);
+        let mut e = entry("hello");
+        e.severity = Some(Severity::Error);
+        buf.push(e).unwrap();
+        buf.flush_memory_to_disk().unwrap();
+        let chunk = buf.next_disk_chunk().unwrap().unwrap();
+        let entries = Buffer::read_chunk(&chunk).unwrap();
+        assert_eq!(entries[0].severity, Some(Severity::Error));
     }
 }

@@ -42,8 +42,6 @@ fn encode_entry(entry: &LogEntry) -> Result<Vec<u8>> {
                 let val = match v {
                     LabelValue::Str(s) => CborValue::Text(s.clone()),
                     LabelValue::Int(i) => CborValue::Integer((*i).into()),
-                    LabelValue::Float(f) => CborValue::Float(*f),
-                    LabelValue::Bool(b) => CborValue::Bool(*b),
                 };
                 (key, val)
             })
@@ -119,6 +117,7 @@ pub fn start(
     device_id: &str,
     ingest_key: &str,
     cfg: &MqttConfig,
+    mut shutdown: tokio::sync::watch::Receiver<bool>,
 ) -> Result<MqttPublisher> {
     let mut options = MqttOptions::new(device_id, &cfg.broker, cfg.port);
     options.set_credentials(device_id, ingest_key);
@@ -136,21 +135,29 @@ pub fn start(
     // rumqttc handles reconnection automatically; we just watch for state changes.
     tokio::spawn(async move {
         loop {
-            match eventloop.poll().await {
-                Ok(Event::Incoming(Packet::ConnAck(_))) => {
-                    info!("MQTT connected to Spotflow platform");
-                    connected_flag.store(true, Ordering::Relaxed);
-                }
-                Ok(_) => {}
-                Err(e) => {
-                    if connected_flag.load(Ordering::Relaxed) {
-                        warn!("MQTT connection lost: {e}");
-                        connected_flag.store(false, Ordering::Relaxed);
-                    } else {
-                        debug!("MQTT reconnecting: {e}");
+            tokio::select! {
+                result = eventloop.poll() => {
+                    match result {
+                        Ok(Event::Incoming(Packet::ConnAck(_))) => {
+                            info!("MQTT connected to Spotflow platform");
+                            connected_flag.store(true, Ordering::Relaxed);
+                        }
+                        Ok(_) => {}
+                        Err(e) => {
+                            if connected_flag.load(Ordering::Relaxed) {
+                                warn!("MQTT connection lost: {e}");
+                                connected_flag.store(false, Ordering::Relaxed);
+                            } else {
+                                debug!("MQTT reconnecting: {e}");
+                            }
+                            // rumqttc will retry automatically; brief yield before next poll
+                            tokio::time::sleep(Duration::from_millis(100)).await;
+                        }
                     }
-                    // rumqttc will retry automatically; brief yield before next poll
-                    tokio::time::sleep(Duration::from_millis(100)).await;
+                }
+                _ = shutdown.changed() => {
+                    debug!("MQTT event loop shutting down");
+                    break;
                 }
             }
         }

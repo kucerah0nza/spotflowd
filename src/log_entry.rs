@@ -27,14 +27,13 @@ impl Severity {
     }
 }
 
-/// A label value: string, integer, float, or boolean (per Spotflow MQTT spec).
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// A label value (per Spotflow MQTT spec, key 5 values).
+/// Float and Bool are part of the spec but no current source produces them.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum LabelValue {
     Str(String),
     Int(i64),
-    Float(f64),
-    Bool(bool),
 }
 
 /// A single log entry as it flows through the daemon pipeline.

@@ -54,6 +54,12 @@ sudo nano /etc/spotflow/spotflowd.toml
 
 Set `device.id` and `device.ingest_key` to the values from your Spotflow dashboard.
 
+Restrict the config file so the ingest key is not world-readable:
+
+```bash
+sudo chmod 600 /etc/spotflow/spotflowd.toml
+```
+
 **5. Install and start the systemd service**
 
 ```bash
@@ -175,6 +181,7 @@ cargo build --release --no-default-features
 | `failed to open journald` | Missing `libsystemd-dev` | `apt-get install libsystemd-dev` |
 | Syslog file not found | `rsyslog` not installed | `apt-get install rsyslog` |
 | No logs in Spotflow dashboard | Both sources disabled in config | Set `journald = true` or `syslog = true` |
+| Duplicate log entries in dashboard | Both `journald` and `syslog` enabled on systemd | Disable syslog: `syslog = false` (default on systemd builds) |
 
 ## Roadmap
 

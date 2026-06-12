@@ -196,30 +196,37 @@ fn try_rfc3164(line: &str) -> Option<LogEntry> {
         .map(|(i, _)| i + 1)
         .unwrap_or(0);
 
-    let body = rest[msg_start..].to_string();
-    if body.is_empty() {
-        return None;
-    }
-
     let (severity, _) = parse_priority(pri_str);
     let severity = Some(severity);
 
     // Extract hostname (2nd token) and tag (4th token) for labels.
     let mut labels = base_labels();
     let tokens: Vec<&str> = rest.splitn(5, ' ').collect();
-    // tokens: [MON, DD, HH:MM:SS, HOSTNAME, TAG: MSG]
+    // tokens: [MON, DD, HH:MM:SS, HOSTNAME, TAG[PID]: MSG]
     if tokens.len() > 3 {
         labels.insert("hostname".into(), LabelValue::Str(tokens[3].to_string()));
     }
-    if tokens.len() > 4 {
+    let (process, pid) = if tokens.len() > 4 {
         let tag_msg = tokens[4];
-        let (process, pid) = parse_tag(tag_msg.split(':').next().unwrap_or(""));
-        if !process.is_empty() {
-            labels.insert("process".into(), LabelValue::Str(process));
-        }
-        if let Some(p) = pid {
-            labels.insert("pid".into(), LabelValue::Int(p));
-        }
+        parse_tag(tag_msg.split(':').next().unwrap_or(""))
+    } else {
+        (String::new(), None)
+    };
+    if !process.is_empty() {
+        labels.insert("process".into(), LabelValue::Str(process));
+    }
+    if let Some(p) = pid {
+        labels.insert("pid".into(), LabelValue::Int(p));
+    }
+
+    // B3: strip "TAG[PID]: " prefix so body contains only the actual message.
+    let tag_and_msg = &rest[msg_start..];
+    let body = match tag_and_msg.find(": ") {
+        Some(pos) => tag_and_msg[pos + 2..].to_string(),
+        None => tag_and_msg.to_string(),
+    };
+    if body.is_empty() {
+        return None;
     }
 
     Some(LogEntry {
@@ -261,26 +268,18 @@ fn try_rsyslog_default(line: &str) -> Option<LogEntry> {
     let tag_part = parts.next()?; // e.g. "myapp[999]:" or "myapp:"
     let message = parts.next().unwrap_or("").trim_start();
 
-    // Validate timestamp looks like an ISO 8601 date.
-    if !timestamp_str.contains('T') && !timestamp_str.contains('-') {
+    // I2: require a valid ISO 8601 timestamp to reject non-syslog lines.
+    let timestamp_ms = parse_iso8601_ms(timestamp_str)?;
+
+    // I3: require a non-empty message body.
+    if message.is_empty() {
         return None;
     }
-    let timestamp_ms = parse_iso8601_ms(timestamp_str);
+    let body = message.to_string();
 
     // Strip trailing colon from tag.
     let tag = tag_part.trim_end_matches(':');
     let (process, pid) = parse_tag(tag);
-
-    let body = if message.is_empty() {
-        // If no message after tag, use the rest of the line as body.
-        format!("{} {}", tag_part, message).trim().to_string()
-    } else {
-        message.to_string()
-    };
-
-    if body.is_empty() {
-        return None;
-    }
 
     let mut labels = base_labels();
     labels.insert("hostname".into(), LabelValue::Str(hostname.to_string()));
@@ -294,7 +293,7 @@ fn try_rsyslog_default(line: &str) -> Option<LogEntry> {
     Some(LogEntry {
         body,
         severity: None, // rsyslog default format carries no priority
-        timestamp_ms,
+        timestamp_ms: Some(timestamp_ms),
         uptime_ms: None,
         source: "syslog".to_string(),
         labels,
@@ -307,4 +306,137 @@ fn parse_iso8601_ms(s: &str) -> Option<u64> {
     chrono::DateTime::parse_from_rfc3339(s)
         .ok()
         .map(|dt| dt.timestamp_millis() as u64)
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn label_str(entry: &LogEntry, key: &str) -> Option<String> {
+        match entry.labels.get(key) {
+            Some(LabelValue::Str(s)) => Some(s.clone()),
+            _ => None,
+        }
+    }
+
+    fn label_int(entry: &LogEntry, key: &str) -> Option<i64> {
+        match entry.labels.get(key) {
+            Some(LabelValue::Int(i)) => Some(*i),
+            _ => None,
+        }
+    }
+
+    // --- parse_tag ---
+
+    #[test]
+    fn parse_tag_with_pid() {
+        assert_eq!(parse_tag("myapp[1234]"), ("myapp".into(), Some(1234)));
+    }
+
+    #[test]
+    fn parse_tag_without_pid() {
+        assert_eq!(parse_tag("kernel"), ("kernel".into(), None));
+    }
+
+    #[test]
+    fn parse_tag_empty() {
+        assert_eq!(parse_tag(""), ("".into(), None));
+    }
+
+    // --- RFC 5424 ---
+
+    #[test]
+    fn rfc5424_full_line() {
+        let line = "<34>1 2026-06-12T15:30:00Z myhost myapp 1234 - - test message";
+        let e = try_rfc5424(line).unwrap();
+        assert_eq!(e.body, "test message");
+        // PRI=34: facility=4, severity=2 (Critical)
+        assert_eq!(e.severity, Some(Severity::Critical));
+        assert_eq!(label_str(&e, "hostname").as_deref(), Some("myhost"));
+        assert_eq!(label_str(&e, "process").as_deref(), Some("myapp"));
+        assert_eq!(label_int(&e, "pid"), Some(1234));
+        assert!(e.timestamp_ms.is_some());
+    }
+
+    #[test]
+    fn rfc5424_nil_fields_omitted_from_labels() {
+        let line = "<13>1 2026-06-12T10:00:00Z - - - - - hello";
+        let e = try_rfc5424(line).unwrap();
+        assert_eq!(e.body, "hello");
+        assert!(!e.labels.contains_key("hostname"));
+        assert!(!e.labels.contains_key("process"));
+    }
+
+    #[test]
+    fn rfc5424_rejects_non_pri_line() {
+        assert!(try_rfc5424("plain text").is_none());
+    }
+
+    // --- RFC 3164 ---
+
+    #[test]
+    fn rfc3164_body_excludes_tag() {
+        // B3: body must not include "TAG[PID]: "
+        let line = "<13>Jun 12 15:30:00 myhost myapp[999]: actual message";
+        let e = try_rfc3164(line).unwrap();
+        assert_eq!(e.body, "actual message");
+        assert_eq!(label_str(&e, "hostname").as_deref(), Some("myhost"));
+        assert_eq!(label_str(&e, "process").as_deref(), Some("myapp"));
+        assert_eq!(label_int(&e, "pid"), Some(999));
+    }
+
+    #[test]
+    fn rfc3164_tag_without_pid() {
+        let line = "<13>Jun 12 15:30:00 myhost kernel: oops";
+        let e = try_rfc3164(line).unwrap();
+        assert_eq!(e.body, "oops");
+        assert_eq!(label_str(&e, "process").as_deref(), Some("kernel"));
+        assert!(label_int(&e, "pid").is_none());
+    }
+
+    // --- rsyslog default ---
+
+    #[test]
+    fn rsyslog_default_parsed() {
+        let line = "2026-06-12T15:26:45+02:00 debian myapp[999]: hello world";
+        let e = try_rsyslog_default(line).unwrap();
+        assert_eq!(e.body, "hello world");
+        assert!(e.timestamp_ms.is_some());
+        assert_eq!(label_str(&e, "hostname").as_deref(), Some("debian"));
+        assert_eq!(label_str(&e, "process").as_deref(), Some("myapp"));
+        assert_eq!(label_int(&e, "pid"), Some(999));
+        assert_eq!(e.severity, None);
+    }
+
+    #[test]
+    fn rsyslog_default_rejects_invalid_timestamp() {
+        // I2: non-ISO8601 first token → None
+        assert!(try_rsyslog_default("not-a-ts hostname app: msg").is_none());
+    }
+
+    #[test]
+    fn rsyslog_default_rejects_empty_message() {
+        // I3: no message after tag → None
+        let line = "2026-06-12T15:26:45+02:00 debian myapp:";
+        assert!(try_rsyslog_default(line).is_none());
+    }
+
+    #[test]
+    fn rsyslog_default_ignores_pri_lines() {
+        assert!(try_rsyslog_default("<13>Jun 12 15:30:00 host tag: msg").is_none());
+    }
+
+    // --- parse_line fallback ---
+
+    #[test]
+    fn fallback_uses_whole_line_as_body() {
+        let e = parse_line("some unrecognised log line here");
+        assert_eq!(e.body, "some unrecognised log line here");
+        assert_eq!(e.severity, None);
+        assert_eq!(label_str(&e, "source").as_deref(), Some("syslog"));
+    }
 }

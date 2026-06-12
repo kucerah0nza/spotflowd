@@ -18,8 +18,10 @@ keepalive_secs = 60
 [sources]
 # Collect logs from systemd journal (requires journald feature, default: true).
 journald = true
-# Collect logs by tailing a syslog file (default: true).
-syslog = true
+# Collect logs by tailing a syslog file.
+# Default: false on systemd builds (journald already captures everything rsyslog
+# writes — enabling both causes duplicate entries). Default: true on Yocto/non-systemd.
+syslog = false
 # Path to the syslog file. Defaults to /var/log/syslog on Debian/Ubuntu
 # or /var/log/messages on RHEL/Yocto systems.
 syslog_path = "/var/log/syslog"

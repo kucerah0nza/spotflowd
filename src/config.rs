@@ -30,10 +30,10 @@ pub struct MqttConfig {
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct SourcesConfig {
-    #[allow(dead_code)] // read only when the `journald` feature is enabled
+    #[cfg_attr(not(feature = "journald"), allow(dead_code))]
     #[serde(default = "default_true")]
     pub journald: bool,
-    #[serde(default = "default_true")]
+    #[serde(default = "default_syslog")]
     pub syslog: bool,
     #[serde(default = "default_syslog_path")]
     pub syslog_path: PathBuf,
@@ -81,6 +81,9 @@ impl Config {
         if self.buffer.disk_chunk_max_entries == 0 {
             anyhow::bail!("buffer.disk_chunk_max_entries must be > 0");
         }
+        if self.buffer.disk_max_size_mb == 0 {
+            anyhow::bail!("buffer.disk_max_size_mb must be > 0");
+        }
         Ok(())
     }
 }
@@ -96,6 +99,12 @@ fn default_keepalive_secs() -> u64 {
 }
 fn default_true() -> bool {
     true
+}
+fn default_syslog() -> bool {
+    // On systemd systems the journald source already captures everything rsyslog writes.
+    // Default to disabled to avoid duplicate entries. Users on non-systemd targets
+    // (Yocto, no journald feature) get syslog enabled by default.
+    cfg!(not(feature = "journald"))
 }
 fn default_syslog_path() -> PathBuf {
     // Try /var/log/syslog first (Debian/Ubuntu); fall back to /var/log/messages (RHEL/Yocto).

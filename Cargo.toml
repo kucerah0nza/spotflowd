@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2021"
 description = "Spotflow observability daemon for Linux — collects logs and sends them to the Spotflow platform"
 license = "BSL-1.1"
-repository = "https://github.com/spotflow-io/spotflowd"
+repository = "https://github.com/kucerah0nza/spotflowd"
 
 [[bin]]
 name = "spotflowd"
@@ -37,10 +37,12 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 # Error handling
 anyhow = "1"
-thiserror = "1"
 
 # Time
 chrono = "0.4"
+
+[dev-dependencies]
+tempfile = "3"
 
 [features]
 default = ["journald"]
