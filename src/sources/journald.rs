@@ -8,7 +8,7 @@ use crate::log_entry::{LogEntry, Severity};
 use anyhow::Result;
 use std::time::Duration;
 use tokio::sync::mpsc;
-use tracing::{debug, error, warn};
+use tracing::warn;
 
 pub async fn run(tx: mpsc::Sender<LogEntry>) -> Result<()> {
     tokio::task::spawn_blocking(move || run_blocking(tx)).await??;
@@ -16,9 +16,10 @@ pub async fn run(tx: mpsc::Sender<LogEntry>) -> Result<()> {
 }
 
 fn run_blocking(tx: mpsc::Sender<LogEntry>) -> Result<()> {
-    use systemd::journal::{Journal, JournalFiles, JournalSeek};
+    use systemd::journal::{JournalSeek, OpenOptions};
 
-    let mut journal = Journal::open(JournalFiles::All, false, true)
+    let mut journal = OpenOptions::default()
+        .open()
         .map_err(|e| anyhow::anyhow!("failed to open journald: {e}"))?;
 
     // Start from the current tail — don't replay historical entries.
@@ -50,7 +51,7 @@ fn run_blocking(tx: mpsc::Sender<LogEntry>) -> Result<()> {
     Ok(())
 }
 
-fn entry_to_log(entry: &std::collections::HashMap<String, String>) -> Option<LogEntry> {
+fn entry_to_log(entry: &std::collections::BTreeMap<String, String>) -> Option<LogEntry> {
     let body = entry.get("MESSAGE")?.clone();
     if body.is_empty() {
         return None;
