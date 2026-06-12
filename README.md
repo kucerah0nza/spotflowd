@@ -38,7 +38,7 @@ source "$HOME/.cargo/env"
 **3. Clone and build**
 
 ```bash
-git clone https://github.com/spotflow-io/spotflowd.git
+git clone https://github.com/kucerah0nza/spotflowd.git
 cd spotflowd
 cargo build --release
 sudo cp target/release/spotflowd /usr/sbin/spotflowd
