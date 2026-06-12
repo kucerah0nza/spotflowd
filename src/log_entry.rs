@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 
 /// Severity levels matching the Spotflow MQTT CBOR encoding (key 4).
 /// Integer values align with the Spotflow platform spec.
@@ -26,6 +27,16 @@ impl Severity {
     }
 }
 
+/// A label value: string, integer, float, or boolean (per Spotflow MQTT spec).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum LabelValue {
+    Str(String),
+    Int(i64),
+    Float(f64),
+    Bool(bool),
+}
+
 /// A single log entry as it flows through the daemon pipeline.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LogEntry {
@@ -39,4 +50,7 @@ pub struct LogEntry {
     pub uptime_ms: Option<u64>,
     /// Source identifier, e.g. "journald" or "syslog".
     pub source: String,
+    /// Structured key/value labels (CBOR key 5).
+    #[serde(default)]
+    pub labels: HashMap<String, LabelValue>,
 }

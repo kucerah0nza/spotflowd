@@ -6,7 +6,7 @@
 //! events so the orchestrator knows whether to drain the buffer or hold.
 
 use crate::config::MqttConfig;
-use crate::log_entry::LogEntry;
+use crate::log_entry::{LabelValue, LogEntry};
 use anyhow::{Context, Result};
 use ciborium::value::Value as CborValue;
 use rumqttc::{AsyncClient, Event, MqttOptions, Packet, QoS, TlsConfiguration, Transport};
@@ -33,6 +33,23 @@ fn encode_entry(entry: &LogEntry) -> Result<Vec<u8>> {
             CborValue::Integer((entry.severity as u64).into()),
         ),
     ];
+    if !entry.labels.is_empty() {
+        let label_map: Vec<(CborValue, CborValue)> = entry
+            .labels
+            .iter()
+            .map(|(k, v)| {
+                let key = CborValue::Text(k.clone());
+                let val = match v {
+                    LabelValue::Str(s) => CborValue::Text(s.clone()),
+                    LabelValue::Int(i) => CborValue::Integer((*i).into()),
+                    LabelValue::Float(f) => CborValue::Float(*f),
+                    LabelValue::Bool(b) => CborValue::Bool(*b),
+                };
+                (key, val)
+            })
+            .collect();
+        map.push((CborValue::Integer(5u64.into()), CborValue::Map(label_map)));
+    }
     if let Some(uptime) = entry.uptime_ms {
         map.push((
             CborValue::Integer(6u64.into()),

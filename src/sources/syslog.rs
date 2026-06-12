@@ -7,7 +7,8 @@
 //! Parses both RFC 3164 and RFC 5424 syslog formats. Falls back to treating
 //! the whole line as the message body if parsing fails.
 
-use crate::log_entry::{LogEntry, Severity};
+use crate::log_entry::{LabelValue, LogEntry, Severity};
+use std::collections::HashMap;
 use anyhow::Result;
 use std::io::{BufRead, BufReader, Seek, SeekFrom};
 use std::path::PathBuf;
@@ -89,6 +90,12 @@ fn inode_of(path: &PathBuf) -> Option<u64> {
 // Syslog line parsing
 // ---------------------------------------------------------------------------
 
+fn base_labels() -> HashMap<String, LabelValue> {
+    let mut m = HashMap::new();
+    m.insert("source".into(), LabelValue::Str("syslog".into()));
+    m
+}
+
 fn parse_line(line: &str) -> LogEntry {
     // Try RFC 5424 first: `<PRI>1 TIMESTAMP HOSTNAME APP-NAME PROCID MSGID SD MSG`
     if let Some(entry) = try_rfc5424(line) {
@@ -98,6 +105,10 @@ fn parse_line(line: &str) -> LogEntry {
     if let Some(entry) = try_rfc3164(line) {
         return entry;
     }
+    // Try rsyslog default (no <PRI>): `TIMESTAMP HOSTNAME TAG[PID]: MSG`
+    if let Some(entry) = try_rsyslog_default(line) {
+        return entry;
+    }
     // Fallback: treat whole line as message body.
     LogEntry {
         body: line.to_string(),
@@ -105,6 +116,7 @@ fn parse_line(line: &str) -> LogEntry {
         timestamp_ms: None,
         uptime_ms: None,
         source: "syslog".to_string(),
+        labels: base_labels(),
     }
 }
 
@@ -138,12 +150,25 @@ fn try_rfc5424(line: &str) -> Option<LogEntry> {
     let timestamp_ms = parse_iso8601_ms(parts[0]);
     let body = parts[6].trim_start_matches("BOM").to_string();
 
+    let mut labels = base_labels();
+    // parts: [TIMESTAMP, HOSTNAME, APP-NAME, PROCID, MSGID, SD, MSG]
+    if parts[1] != "-" {
+        labels.insert("hostname".into(), LabelValue::Str(parts[1].to_string()));
+    }
+    if parts[2] != "-" {
+        labels.insert("process".into(), LabelValue::Str(parts[2].to_string()));
+    }
+    if let Ok(pid) = parts[3].parse::<i64>() {
+        labels.insert("pid".into(), LabelValue::Int(pid));
+    }
+
     Some(LogEntry {
         body,
         severity,
         timestamp_ms,
         uptime_ms: None,
         source: "syslog".to_string(),
+        labels,
     })
 }
 
@@ -177,12 +202,100 @@ fn try_rfc3164(line: &str) -> Option<LogEntry> {
 
     let (severity, _) = parse_priority(pri_str);
 
+    // Extract hostname (2nd token) and tag (4th token) for labels.
+    let mut labels = base_labels();
+    let tokens: Vec<&str> = rest.splitn(5, ' ').collect();
+    // tokens: [MON, DD, HH:MM:SS, HOSTNAME, TAG: MSG]
+    if tokens.len() > 3 {
+        labels.insert("hostname".into(), LabelValue::Str(tokens[3].to_string()));
+    }
+    if tokens.len() > 4 {
+        let tag_msg = tokens[4];
+        let (process, pid) = parse_tag(tag_msg.split(':').next().unwrap_or(""));
+        if !process.is_empty() {
+            labels.insert("process".into(), LabelValue::Str(process));
+        }
+        if let Some(p) = pid {
+            labels.insert("pid".into(), LabelValue::Int(p));
+        }
+    }
+
     Some(LogEntry {
         body,
         severity,
         timestamp_ms: None, // RFC 3164 timestamps have no year; skip for now
         uptime_ms: None,
         source: "syslog".to_string(),
+        labels,
+    })
+}
+
+/// Parse a syslog tag like `myapp[1234]` into (process_name, optional_pid).
+fn parse_tag(tag: &str) -> (String, Option<i64>) {
+    if let Some(bracket) = tag.find('[') {
+        let process = tag[..bracket].to_string();
+        let pid = tag[bracket + 1..]
+            .trim_end_matches(']')
+            .parse::<i64>()
+            .ok();
+        (process, pid)
+    } else {
+        (tag.to_string(), None)
+    }
+}
+
+/// Try rsyslog default file format (no `<PRI>` prefix):
+///   `RFC3339_TIMESTAMP HOSTNAME TAG[PID]: MESSAGE`
+/// e.g. `2026-06-12T15:26:45.123456+02:00 debian myapp[999]: hello`
+fn try_rsyslog_default(line: &str) -> Option<LogEntry> {
+    // Must not start with '<' (those are handled by RFC parsers).
+    if line.starts_with('<') {
+        return None;
+    }
+    // Split into at most 4 parts: TIMESTAMP HOSTNAME TAG_PID: MESSAGE
+    let mut parts = line.splitn(4, ' ');
+    let timestamp_str = parts.next()?;
+    let hostname = parts.next()?;
+    let tag_part = parts.next()?; // e.g. "myapp[999]:" or "myapp:"
+    let message = parts.next().unwrap_or("").trim_start();
+
+    // Validate timestamp looks like an ISO 8601 date.
+    if !timestamp_str.contains('T') && !timestamp_str.contains('-') {
+        return None;
+    }
+    let timestamp_ms = parse_iso8601_ms(timestamp_str);
+
+    // Strip trailing colon from tag.
+    let tag = tag_part.trim_end_matches(':');
+    let (process, pid) = parse_tag(tag);
+
+    let body = if message.is_empty() {
+        // If no message after tag, use the rest of the line as body.
+        format!("{} {}", tag_part, message).trim().to_string()
+    } else {
+        message.to_string()
+    };
+
+    if body.is_empty() {
+        return None;
+    }
+
+    let mut labels = base_labels();
+    labels.insert("hostname".into(), LabelValue::Str(hostname.to_string()));
+    if !process.is_empty() {
+        labels.insert("process".into(), LabelValue::Str(process));
+    }
+    if let Some(p) = pid {
+        labels.insert("pid".into(), LabelValue::Int(p));
+    }
+
+    Some(LogEntry {
+        body,
+        severity: Severity::Info, // no priority in this format
+        timestamp_ms,
+        uptime_ms: None,
+        source: "syslog".to_string(),
+        labels,
     })
 }
 
