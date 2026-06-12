@@ -30,7 +30,7 @@ pub async fn run(
     // -----------------------------------------------------------------------
 
     #[cfg(feature = "journald")]
-    if cfg.sources.journald {
+    if cfg.logs.journald {
         let tx2 = tx.clone();
         let flag = shutdown_threads.clone();
         tokio::spawn(async move {
@@ -40,9 +40,9 @@ pub async fn run(
         });
     }
 
-    if cfg.sources.syslog {
+    if cfg.logs.syslog {
         let tx2 = tx.clone();
-        let path = cfg.sources.syslog_path.clone();
+        let path = cfg.logs.syslog_path.clone();
         let flag = shutdown_threads.clone();
         tokio::spawn(async move {
             if let Err(e) = crate::sources::syslog::run(path, tx2, flag).await {
@@ -53,7 +53,7 @@ pub async fn run(
 
     if cfg.metrics.enabled {
         let metrics_cfg = cfg.metrics.clone();
-        let seq_dir = cfg.buffer.disk_path.clone();
+        let seq_dir = cfg.logs.buffer.disk_path.clone();
         let publisher_clone = publisher.clone();
         let shutdown_rx = shutdown.clone();
         tokio::spawn(async move {
@@ -68,7 +68,7 @@ pub async fn run(
     // -----------------------------------------------------------------------
     // Buffer
     // -----------------------------------------------------------------------
-    let buffer = Arc::new(Mutex::new(Buffer::new(cfg.buffer.clone())));
+    let buffer = Arc::new(Mutex::new(Buffer::new(cfg.logs.buffer.clone())));
 
     // -----------------------------------------------------------------------
     // Ingestion task

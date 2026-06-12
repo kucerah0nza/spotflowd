@@ -15,7 +15,7 @@ port = 8883
 # MQTT keep-alive interval in seconds (default: 60).
 keepalive_secs = 60
 
-[sources]
+[logs]
 # Collect logs from systemd journal (requires journald feature, default: true).
 journald = true
 # Collect logs by tailing a syslog file.
@@ -25,6 +25,21 @@ syslog = false
 # Path to the syslog file. Defaults to /var/log/syslog on Debian/Ubuntu
 # or /var/log/messages on RHEL/Yocto systems.
 syslog_path = "/var/log/syslog"
+
+[logs.buffer]
+# Maximum number of log entries held in memory.
+# When this limit is reached, entries are flushed to a disk chunk.
+memory_max_entries = 1000
+
+# Directory for on-disk spool chunk files.
+disk_path = "/var/lib/spotflow/spool"
+
+# Maximum total size of the disk spool in megabytes.
+# When reached, the oldest chunk files are dropped to make room.
+disk_max_size_mb = 64
+
+# Number of log entries per disk chunk file.
+disk_chunk_max_entries = 200
 
 [metrics]
 # Set to true to enable OS metrics collection and upload.
@@ -55,18 +70,3 @@ mount_points = ["/"]
 [metrics.network]
 # Interfaces to report. Empty = auto-detect all non-loopback interfaces.
 interfaces = []
-
-[buffer]
-# Maximum number of log entries held in memory.
-# When this limit is reached, entries are flushed to a disk chunk.
-memory_max_entries = 1000
-
-# Directory for on-disk spool chunk files.
-disk_path = "/var/lib/spotflow/spool"
-
-# Maximum total size of the disk spool in megabytes.
-# When reached, the oldest chunk files are dropped to make room.
-disk_max_size_mb = 64
-
-# Number of log entries per disk chunk file.
-disk_chunk_max_entries = 200

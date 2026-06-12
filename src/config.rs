@@ -8,8 +8,7 @@ pub const DEFAULT_CONFIG_PATH: &str = "/etc/spotflow/spotflowd.toml";
 pub struct Config {
     pub device: DeviceConfig,
     pub mqtt: MqttConfig,
-    pub sources: SourcesConfig,
-    pub buffer: BufferConfig,
+    pub logs: LogsConfig,
     #[serde(default)]
     pub metrics: MetricsConfig,
 }
@@ -115,7 +114,7 @@ pub struct MqttConfig {
 }
 
 #[derive(Debug, Clone, Deserialize)]
-pub struct SourcesConfig {
+pub struct LogsConfig {
     #[cfg_attr(not(feature = "journald"), allow(dead_code))]
     #[serde(default = "default_true")]
     pub journald: bool,
@@ -123,6 +122,8 @@ pub struct SourcesConfig {
     pub syslog: bool,
     #[serde(default = "default_syslog_path")]
     pub syslog_path: PathBuf,
+    #[serde(default)]
+    pub buffer: BufferConfig,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -144,6 +145,17 @@ pub struct BufferConfig {
     pub disk_chunk_max_entries: usize,
 }
 
+impl Default for BufferConfig {
+    fn default() -> Self {
+        Self {
+            memory_max_entries: default_memory_max_entries(),
+            disk_path: default_disk_path(),
+            disk_max_size_mb: default_disk_max_size_mb(),
+            disk_chunk_max_entries: default_disk_chunk_max_entries(),
+        }
+    }
+}
+
 impl Config {
     pub fn load(path: &Path) -> Result<Self> {
         let content = std::fs::read_to_string(path)
@@ -161,14 +173,14 @@ impl Config {
         if self.device.ingest_key.is_empty() {
             anyhow::bail!("device.ingest_key must not be empty");
         }
-        if self.buffer.memory_max_entries == 0 {
-            anyhow::bail!("buffer.memory_max_entries must be > 0");
+        if self.logs.buffer.memory_max_entries == 0 {
+            anyhow::bail!("logs.buffer.memory_max_entries must be > 0");
         }
-        if self.buffer.disk_chunk_max_entries == 0 {
-            anyhow::bail!("buffer.disk_chunk_max_entries must be > 0");
+        if self.logs.buffer.disk_chunk_max_entries == 0 {
+            anyhow::bail!("logs.buffer.disk_chunk_max_entries must be > 0");
         }
-        if self.buffer.disk_max_size_mb == 0 {
-            anyhow::bail!("buffer.disk_max_size_mb must be > 0");
+        if self.logs.buffer.disk_max_size_mb == 0 {
+            anyhow::bail!("logs.buffer.disk_max_size_mb must be > 0");
         }
         if self.metrics.enabled {
             if self.metrics.collection_interval_secs == 0 {
