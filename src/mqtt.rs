@@ -30,22 +30,22 @@ pub fn encode_batch(entries: &[LogEntry]) -> Result<Vec<u8>> {
         .iter()
         .map(|e| {
             let mut map = vec![
-                (CborValue::Integer(1.into()), CborValue::Text(e.body.clone())),
+                (CborValue::Integer(1u64.into()), CborValue::Text(e.body.clone())),
                 (
-                    CborValue::Integer(4.into()),
-                    CborValue::Integer((e.severity as u8 as i128).into()),
+                    CborValue::Integer(4u64.into()),
+                    CborValue::Integer((e.severity as u64).into()),
                 ),
             ];
             if let Some(uptime) = e.uptime_ms {
                 map.push((
-                    CborValue::Integer(6.into()),
-                    CborValue::Integer((uptime as i128).into()),
+                    CborValue::Integer(6u64.into()),
+                    CborValue::Integer(uptime.into()),
                 ));
             }
             if let Some(ts) = e.timestamp_ms {
                 map.push((
-                    CborValue::Integer(7.into()),
-                    CborValue::Integer((ts as i128).into()),
+                    CborValue::Integer(7u64.into()),
+                    CborValue::Integer(ts.into()),
                 ));
             }
             CborValue::Map(map)
@@ -94,7 +94,9 @@ impl MqttPublisher {
 
 fn build_client_config() -> Arc<ClientConfig> {
     let mut root_store = rustls::RootCertStore::empty();
-    root_store.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+    for cert in rustls_native_certs::load_native_certs().unwrap_or_default() {
+        root_store.add(cert).ok(); // skip any malformed certs silently
+    }
     let config = ClientConfig::builder()
         .with_root_certificates(root_store)
         .with_no_client_auth();

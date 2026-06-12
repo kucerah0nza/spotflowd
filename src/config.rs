@@ -30,6 +30,7 @@ pub struct MqttConfig {
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct SourcesConfig {
+    #[allow(dead_code)] // read only when the `journald` feature is enabled
     #[serde(default = "default_true")]
     pub journald: bool,
     #[serde(default = "default_true")]
@@ -55,11 +56,6 @@ pub struct BufferConfig {
     /// Number of log entries per disk chunk file.
     #[serde(default = "default_disk_chunk_max_entries")]
     pub disk_chunk_max_entries: usize,
-
-    /// Interval (seconds) at which in-memory entries are flushed to disk
-    /// even when the memory buffer is not full.
-    #[serde(default = "default_disk_flush_interval_secs")]
-    pub disk_flush_interval_secs: u64,
 }
 
 impl Config {
@@ -121,7 +117,4 @@ fn default_disk_max_size_mb() -> u64 {
 }
 fn default_disk_chunk_max_entries() -> usize {
     200
-}
-fn default_disk_flush_interval_secs() -> u64 {
-    30
 }
