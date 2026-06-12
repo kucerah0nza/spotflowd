@@ -11,7 +11,7 @@ use crate::log_entry::{LabelValue, LogEntry, Severity};
 use std::collections::HashMap;
 use anyhow::Result;
 use std::io::{BufRead, BufReader, Seek, SeekFrom};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
@@ -68,20 +68,20 @@ fn run_blocking(path: PathBuf, tx: mpsc::Sender<LogEntry>, shutdown: Arc<AtomicB
     Ok(())
 }
 
-fn open_and_seek_end(path: &PathBuf) -> Result<std::fs::File> {
+fn open_and_seek_end(path: &Path) -> Result<std::fs::File> {
     let mut f = std::fs::File::open(path)
         .map_err(|e| anyhow::anyhow!("cannot open syslog file {}: {e}", path.display()))?;
     f.seek(SeekFrom::End(0))?;
     Ok(f)
 }
 
-fn open_at_start(path: &PathBuf) -> Result<std::fs::File> {
+fn open_at_start(path: &Path) -> Result<std::fs::File> {
     let f = std::fs::File::open(path)
         .map_err(|e| anyhow::anyhow!("cannot open syslog file {}: {e}", path.display()))?;
     Ok(f)
 }
 
-fn inode_of(path: &PathBuf) -> Option<u64> {
+fn inode_of(path: &Path) -> Option<u64> {
     use std::os::unix::fs::MetadataExt;
     std::fs::metadata(path).ok().map(|m| m.ino())
 }
@@ -149,7 +149,8 @@ fn try_rfc5424(line: &str) -> Option<LogEntry> {
     let (severity, _) = parse_priority(pri_str);
     let severity = Some(severity);
     let timestamp_ms = parse_iso8601_ms(parts[0]);
-    let body = parts[6].trim_start_matches("BOM").to_string();
+    // B2: strip the actual UTF-8 BOM character (U+FEFF), not the text "BOM".
+    let body = parts[6].trim_start_matches('\u{FEFF}').to_string();
 
     let mut labels = base_labels();
     // parts: [TIMESTAMP, HOSTNAME, APP-NAME, PROCID, MSGID, SD, MSG]
@@ -199,16 +200,18 @@ fn try_rfc3164(line: &str) -> Option<LogEntry> {
     let (severity, _) = parse_priority(pri_str);
     let severity = Some(severity);
 
-    // Extract hostname (2nd token) and tag (4th token) for labels.
+    // Extract hostname (4th token) and tag (5th token) for labels.
+    // B3: use split_ascii_whitespace() so space-padded single-digit days
+    // ("Jun  1") don't insert an empty token that shifts everything right.
     let mut labels = base_labels();
-    let tokens: Vec<&str> = rest.splitn(5, ' ').collect();
-    // tokens: [MON, DD, HH:MM:SS, HOSTNAME, TAG[PID]: MSG]
+    let tokens: Vec<&str> = rest.split_ascii_whitespace().collect();
+    // tokens: [MON, DD, HH:MM:SS, HOSTNAME, TAG[PID]:, MSG...]
     if tokens.len() > 3 {
         labels.insert("hostname".into(), LabelValue::Str(tokens[3].to_string()));
     }
     let (process, pid) = if tokens.len() > 4 {
-        let tag_msg = tokens[4];
-        parse_tag(tag_msg.split(':').next().unwrap_or(""))
+        let tag = tokens[4].trim_end_matches(':');
+        parse_tag(tag)
     } else {
         (String::new(), None)
     };
@@ -302,10 +305,10 @@ fn try_rsyslog_default(line: &str) -> Option<LogEntry> {
 
 fn parse_iso8601_ms(s: &str) -> Option<u64> {
     // Parse RFC 3339 / ISO 8601 timestamp to Unix milliseconds.
-    // Expected format: 2024-01-15T10:30:00.000Z or 2024-01-15T10:30:00Z
+    // M3: use try_from to avoid wrapping pre-epoch timestamps to huge u64 values.
     chrono::DateTime::parse_from_rfc3339(s)
         .ok()
-        .map(|dt| dt.timestamp_millis() as u64)
+        .and_then(|dt| u64::try_from(dt.timestamp_millis()).ok())
 }
 
 // ---------------------------------------------------------------------------
@@ -438,5 +441,36 @@ mod tests {
         assert_eq!(e.body, "some unrecognised log line here");
         assert_eq!(e.severity, None);
         assert_eq!(label_str(&e, "source").as_deref(), Some("syslog"));
+    }
+
+    // --- B2: BOM stripping ---
+
+    #[test]
+    fn rfc5424_utf8_bom_stripped() {
+        // B2: the real UTF-8 BOM (U+FEFF) must be removed from the body.
+        let line = "<13>1 2026-06-12T10:00:00Z - - - - - \u{FEFF}hello";
+        let e = try_rfc5424(line).unwrap();
+        assert_eq!(e.body, "hello");
+    }
+
+    #[test]
+    fn rfc5424_text_bom_not_stripped() {
+        // B2: a message that literally starts with "BOM" must not be truncated.
+        let line = "<13>1 2026-06-12T10:00:00Z - - - - - BOMber command";
+        let e = try_rfc5424(line).unwrap();
+        assert_eq!(e.body, "BOMber command");
+    }
+
+    // --- B3: RFC 3164 space-padded single-digit days ---
+
+    #[test]
+    fn rfc3164_space_padded_day_labels_correct() {
+        // B3: "Jun  1" (two spaces) must not shift hostname/process/pid tokens.
+        let line = "<13>Jun  1 10:00:00 myhost myapp[999]: actual message";
+        let e = try_rfc3164(line).unwrap();
+        assert_eq!(e.body, "actual message");
+        assert_eq!(label_str(&e, "hostname").as_deref(), Some("myhost"));
+        assert_eq!(label_str(&e, "process").as_deref(), Some("myapp"));
+        assert_eq!(label_int(&e, "pid"), Some(999));
     }
 }

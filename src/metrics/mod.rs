@@ -84,6 +84,13 @@ pub struct ReadyMetric {
 // Main task
 // ---------------------------------------------------------------------------
 
+/// Maximum number of ready metrics held in the pending buffer while offline.
+/// When exceeded, the oldest entries are dropped to bound memory usage.
+const MAX_PENDING: usize = 1000;
+
+/// How often sequence numbers are persisted to disk (I1: flash wear reduction).
+const SEQ_SAVE_INTERVAL: std::time::Duration = std::time::Duration::from_secs(60);
+
 pub async fn run(
     cfg: MetricsConfig,
     seq_dir: PathBuf,
@@ -95,28 +102,58 @@ pub async fn run(
     let mut ticker = interval(Duration::from_secs(cfg.collection_interval_secs));
     ticker.set_missed_tick_behavior(MissedTickBehavior::Skip);
 
+    // B1: buffer ready metrics across ticks so aggregated windows survive disconnects.
+    let mut pending: Vec<ReadyMetric> = Vec::new();
+    // I1: track last save time to throttle disk writes.
+    let mut seq_dirty = false;
+    let mut last_seq_save = std::time::Instant::now();
+
     loop {
         tokio::select! {
             _ = ticker.tick() => {
                 let (samples, uptime_ms) = coll.collect(&cfg);
-                let ready = agg.ingest(samples, uptime_ms);
-                if !ready.is_empty() {
-                    if !publisher.is_connected() {
-                        debug!("metrics: MQTT not connected, dropping {} readings", ready.len());
-                        continue;
+                let mut ready = agg.ingest(samples, uptime_ms);
+                pending.append(&mut ready);
+
+                // Cap the pending buffer to avoid unbounded memory growth when offline.
+                if pending.len() > MAX_PENDING {
+                    let drop_n = pending.len() - MAX_PENDING;
+                    warn!("metrics pending buffer full, dropping {drop_n} oldest readings");
+                    pending.drain(0..drop_n);
+                }
+
+                if pending.is_empty() || !publisher.is_connected() {
+                    if !pending.is_empty() {
+                        debug!("metrics: MQTT not connected, {} readings queued", pending.len());
                     }
-                    match publisher::publish_metrics(&publisher, &ready).await {
-                        Ok(()) => {
-                            debug!("published {} metric readings", ready.len());
+                    continue;
+                }
+
+                match publisher::publish_metrics(&publisher, &pending).await {
+                    Ok(()) => {
+                        debug!("published {} metric readings", pending.len());
+                        pending.clear();
+                        seq_dirty = true;
+                        // I1: persist seq numbers at most once per minute.
+                        if last_seq_save.elapsed() >= SEQ_SAVE_INTERVAL {
                             if let Err(e) = agg.save_seq() {
                                 warn!("failed to save metric sequence numbers: {e}");
                             }
+                            last_seq_save = std::time::Instant::now();
+                            seq_dirty = false;
                         }
-                        Err(e) => warn!("metrics publish error: {e}"),
                     }
+                    Err(e) => warn!("metrics publish error: {e}"),
                 }
             }
             _ = shutdown.changed() => break,
+        }
+    }
+
+    // Always persist seq numbers on clean shutdown.
+    if seq_dirty {
+        if let Err(e) = agg.save_seq() {
+            warn!("failed to save metric sequence numbers on shutdown: {e}");
         }
     }
     Ok(())

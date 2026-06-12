@@ -182,8 +182,8 @@ fn collect_cpu_temp(out: &mut Vec<MetricSample>) {
 }
 
 fn collect_memory(out: &mut Vec<MetricSample>) {
+    // I2: mem_total_bytes is constant (RAM doesn't change) — omit it.
     let Some((total, available, swap_total, swap_free)) = read_meminfo() else { return };
-    out.push(sample("mem_total_bytes", MetricValue::Int(total as i64), &[]));
     out.push(sample("mem_available_bytes", MetricValue::Int(available as i64), &[]));
     if total > 0 {
         let pct = (total - available) as f64 / total as f64 * 100.0;
@@ -267,7 +267,9 @@ fn read_thermal_zones() -> Vec<(String, f64)> {
         return vec![];
     }
     let Ok(entries) = std::fs::read_dir(base) else { return vec![] };
-    let mut zones = Vec::new();
+
+    // First pass: collect raw (type_string, celsius) pairs.
+    let mut raw: Vec<(String, f64)> = Vec::new();
     for entry in entries.filter_map(|e| e.ok()) {
         let name = entry.file_name();
         if !name.to_string_lossy().starts_with("thermal_zone") {
@@ -279,7 +281,29 @@ fn read_thermal_zones() -> Vec<(String, f64)> {
         let zone_type = std::fs::read_to_string(path.join("type"))
             .map(|s| s.trim().to_string())
             .unwrap_or_else(|_| name.to_string_lossy().into_owned());
-        zones.push((zone_type, temp_raw as f64 / 1000.0));
+        raw.push((zone_type, temp_raw as f64 / 1000.0));
+    }
+
+    // I3: count occurrences of each type string.
+    let mut type_count: HashMap<String, usize> = HashMap::new();
+    for (t, _) in &raw {
+        *type_count.entry(t.clone()).or_insert(0) += 1;
+    }
+
+    // Second pass: for duplicate type strings, append a 0-based index so each
+    // zone gets a unique stream key in the aggregator (e.g. "x86_pkg_temp_0").
+    let mut type_seen: HashMap<String, usize> = HashMap::new();
+    let mut zones = Vec::with_capacity(raw.len());
+    for (zone_type, celsius) in raw {
+        let label = if *type_count.get(&zone_type).unwrap_or(&0) > 1 {
+            let idx = type_seen.entry(zone_type.clone()).or_insert(0);
+            let label = format!("{zone_type}_{idx}");
+            *idx += 1;
+            label
+        } else {
+            zone_type
+        };
+        zones.push((label, celsius));
     }
     zones
 }

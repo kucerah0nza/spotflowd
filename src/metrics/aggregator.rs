@@ -180,7 +180,10 @@ fn stream_key(name: &str, labels: &[(&str, String)]) -> String {
     if labels.is_empty() {
         return name.to_string();
     }
-    let label_str = labels
+    // M1: sort by key here so callers don't need to guarantee ordering.
+    let mut sorted: Vec<_> = labels.iter().collect();
+    sorted.sort_by_key(|(k, _)| *k);
+    let label_str = sorted
         .iter()
         .map(|(k, v)| format!("{k}={v}"))
         .collect::<Vec<_>>()

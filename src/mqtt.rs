@@ -72,7 +72,7 @@ fn encode_entry(entry: &LogEntry) -> Result<Vec<u8>> {
 #[derive(Clone)]
 pub struct MqttPublisher {
     client: AsyncClient,
-    pub connected: Arc<AtomicBool>,
+    connected: Arc<AtomicBool>,
 }
 
 impl MqttPublisher {
