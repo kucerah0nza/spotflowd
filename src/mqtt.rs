@@ -22,38 +22,31 @@ const INGEST_TOPIC: &str = "ingest-cbor";
 // CBOR encoding
 // ---------------------------------------------------------------------------
 
-/// Encode a batch of log entries as a CBOR array.
-/// Each entry is a CBOR map using integer keys per the Spotflow spec:
+/// Encode a single log entry as a CBOR map per the Spotflow spec:
 ///   1 = body, 4 = severity, 6 = deviceUptimeMs, 7 = deviceTimestampMs
-pub fn encode_batch(entries: &[LogEntry]) -> Result<Vec<u8>> {
-    let items: Vec<CborValue> = entries
-        .iter()
-        .map(|e| {
-            let mut map = vec![
-                (CborValue::Integer(1u64.into()), CborValue::Text(e.body.clone())),
-                (
-                    CborValue::Integer(4u64.into()),
-                    CborValue::Integer((e.severity as u64).into()),
-                ),
-            ];
-            if let Some(uptime) = e.uptime_ms {
-                map.push((
-                    CborValue::Integer(6u64.into()),
-                    CborValue::Integer(uptime.into()),
-                ));
-            }
-            if let Some(ts) = e.timestamp_ms {
-                map.push((
-                    CborValue::Integer(7u64.into()),
-                    CborValue::Integer(ts.into()),
-                ));
-            }
-            CborValue::Map(map)
-        })
-        .collect();
-
+/// One MQTT message is published per entry.
+fn encode_entry(entry: &LogEntry) -> Result<Vec<u8>> {
+    let mut map = vec![
+        (CborValue::Integer(1u64.into()), CborValue::Text(entry.body.clone())),
+        (
+            CborValue::Integer(4u64.into()),
+            CborValue::Integer((entry.severity as u64).into()),
+        ),
+    ];
+    if let Some(uptime) = entry.uptime_ms {
+        map.push((
+            CborValue::Integer(6u64.into()),
+            CborValue::Integer(uptime.into()),
+        ));
+    }
+    if let Some(ts) = entry.timestamp_ms {
+        map.push((
+            CborValue::Integer(7u64.into()),
+            CborValue::Integer(ts.into()),
+        ));
+    }
     let mut buf = Vec::new();
-    ciborium::into_writer(&CborValue::Array(items), &mut buf).context("CBOR encode failed")?;
+    ciborium::into_writer(&CborValue::Map(map), &mut buf).context("CBOR encode failed")?;
     Ok(buf)
 }
 
@@ -72,18 +65,18 @@ impl MqttPublisher {
         self.connected.load(Ordering::Relaxed)
     }
 
-    /// Publish a batch (QoS 0 — fire and forget).
+    /// Publish a slice of entries — one MQTT message per entry (QoS 0).
     pub async fn publish_batch(&self, entries: &[LogEntry]) -> Result<()> {
-        if entries.is_empty() {
-            return Ok(());
+        for entry in entries {
+            let payload = encode_entry(entry)?;
+            self.client
+                .publish(INGEST_TOPIC, QoS::AtMostOnce, false, payload)
+                .await
+                .context("MQTT publish failed")?;
         }
-        let payload = encode_batch(entries)?;
-        let n = entries.len();
-        self.client
-            .publish(INGEST_TOPIC, QoS::AtMostOnce, false, payload)
-            .await
-            .context("MQTT publish failed")?;
-        debug!("published {n} log entries");
+        if !entries.is_empty() {
+            debug!("published {} log entries", entries.len());
+        }
         Ok(())
     }
 }
