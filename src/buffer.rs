@@ -19,6 +19,8 @@ use tracing::{debug, warn};
 // ---------------------------------------------------------------------------
 
 /// Returns all spool chunk paths sorted newest-first (highest sequence number first).
+/// Only files with a purely numeric stem (e.g. `0000000001.cbor`) are included;
+/// other `.cbor` files in the same directory (e.g. `metrics_seq.cbor`) are ignored.
 fn spool_files_newest_first(dir: &Path) -> Result<Vec<PathBuf>> {
     if !dir.exists() {
         return Ok(vec![]);
@@ -26,7 +28,7 @@ fn spool_files_newest_first(dir: &Path) -> Result<Vec<PathBuf>> {
     let mut paths: Vec<PathBuf> = fs::read_dir(dir)?
         .filter_map(|e| e.ok())
         .map(|e| e.path())
-        .filter(|p| p.extension().and_then(|s| s.to_str()) == Some("cbor"))
+        .filter(|p| is_chunk_file(p))
         .collect();
     // Chunk files are named with a zero-padded sequence number → lexicographic
     // sort descending gives newest-first.
@@ -79,7 +81,7 @@ fn drop_oldest_chunk(dir: &Path) -> Result<()> {
     let mut paths: Vec<PathBuf> = fs::read_dir(dir)?
         .filter_map(|e| e.ok())
         .map(|e| e.path())
-        .filter(|p| p.extension().and_then(|s| s.to_str()) == Some("cbor"))
+        .filter(|p| is_chunk_file(p))
         .collect();
     paths.sort_unstable_by(|a, b| a.file_name().cmp(&b.file_name()));
     if let Some(oldest) = paths.first() {
@@ -87,6 +89,17 @@ fn drop_oldest_chunk(dir: &Path) -> Result<()> {
         fs::remove_file(oldest)?;
     }
     Ok(())
+}
+
+/// Returns true only for files that are spool chunks: `.cbor` extension and a
+/// purely numeric stem (e.g. `0000000001.cbor`). This excludes other `.cbor`
+/// files in the same directory such as `metrics_seq.cbor`.
+fn is_chunk_file(p: &Path) -> bool {
+    p.extension().and_then(|s| s.to_str()) == Some("cbor")
+        && p.file_stem()
+            .and_then(|s| s.to_str())
+            .map(|s| s.chars().all(|c| c.is_ascii_digit()))
+            .unwrap_or(false)
 }
 
 // ---------------------------------------------------------------------------
