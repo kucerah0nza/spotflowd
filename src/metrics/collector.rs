@@ -12,6 +12,7 @@
 use super::{MetricSample, MetricValue};
 use crate::config::MetricsConfig;
 use std::collections::HashMap;
+use std::time::Instant;
 
 // ---------------------------------------------------------------------------
 // Internal counter snapshots (kept between ticks for delta computation)
@@ -26,6 +27,11 @@ struct CpuTicks {
 struct DiskCounters {
     read_sectors: u64,
     write_sectors: u64,
+    read_ops: u64,
+    write_ops: u64,
+    /// Milliseconds the device was busy doing I/O (diskstats field 10, 0-based).
+    /// None on kernels that expose fewer than 13 diskstats fields.
+    io_ms: Option<u64>,
 }
 
 #[derive(Clone, Default)]
@@ -34,6 +40,8 @@ struct NetCounters {
     tx_bytes: u64,
     rx_errors: u64,
     tx_errors: u64,
+    rx_drops: u64,
+    tx_drops: u64,
 }
 
 // ---------------------------------------------------------------------------
@@ -43,6 +51,7 @@ struct NetCounters {
 pub struct Collector {
     prev_cpu: Option<CpuTicks>,
     prev_disk: HashMap<String, DiskCounters>,
+    prev_disk_time: Option<Instant>,
     prev_net: HashMap<String, NetCounters>,
 }
 
@@ -51,6 +60,7 @@ impl Collector {
         Self {
             prev_cpu: None,
             prev_disk: HashMap::new(),
+            prev_disk_time: None,
             prev_net: HashMap::new(),
         }
     }
@@ -108,17 +118,34 @@ impl Collector {
     // --- Disk I/O ---
 
     fn collect_disk_io(&mut self, out: &mut Vec<MetricSample>) {
+        let now = Instant::now();
+        let elapsed_ms = self.prev_disk_time
+            .map(|t| now.duration_since(t).as_millis() as u64)
+            .unwrap_or(0);
+
         let curr = read_diskstats();
         for (dev, c) in &curr {
             if let Some(p) = self.prev_disk.get(dev) {
+                let lbl = &[("device", dev.clone())];
                 let read_bytes = c.read_sectors.saturating_sub(p.read_sectors) * 512;
                 let write_bytes = c.write_sectors.saturating_sub(p.write_sectors) * 512;
-                let lbl = &[("device", dev.clone())];
+                let read_ops = c.read_ops.saturating_sub(p.read_ops);
+                let write_ops = c.write_ops.saturating_sub(p.write_ops);
                 out.push(sample("disk_read_bytes", MetricValue::Int(read_bytes as i64), lbl));
                 out.push(sample("disk_write_bytes", MetricValue::Int(write_bytes as i64), lbl));
+                out.push(sample("disk_read_ops", MetricValue::Int(read_ops as i64), lbl));
+                out.push(sample("disk_write_ops", MetricValue::Int(write_ops as i64), lbl));
+                if elapsed_ms > 0 {
+                    if let (Some(curr_io), Some(prev_io)) = (c.io_ms, p.io_ms) {
+                        let io_ms_delta = curr_io.saturating_sub(prev_io);
+                        let util = (io_ms_delta as f64 / elapsed_ms as f64 * 100.0).min(100.0);
+                        out.push(sample("disk_io_util_percent", MetricValue::Float(util), lbl));
+                    }
+                }
             }
         }
         self.prev_disk = curr;
+        self.prev_disk_time = Some(now);
     }
 
     // --- Network ---
@@ -151,6 +178,16 @@ impl Collector {
                 out.push(sample(
                     "net_tx_errors",
                     MetricValue::Int(c.tx_errors.saturating_sub(p.tx_errors) as i64),
+                    lbl,
+                ));
+                out.push(sample(
+                    "net_rx_drops",
+                    MetricValue::Int(c.rx_drops.saturating_sub(p.rx_drops) as i64),
+                    lbl,
+                ));
+                out.push(sample(
+                    "net_tx_drops",
+                    MetricValue::Int(c.tx_drops.saturating_sub(p.tx_drops) as i64),
                     lbl,
                 ));
             }
@@ -197,7 +234,7 @@ fn collect_memory(out: &mut Vec<MetricSample>) {
 
 fn collect_disk_space(out: &mut Vec<MetricSample>, mounts: &[String]) {
     for mount in mounts {
-        if let Some((free, total)) = disk_free(mount) {
+        if let Some((free, total, inodes_free, inodes_total)) = disk_statvfs(mount) {
             out.push(sample(
                 "disk_free_bytes",
                 MetricValue::Int(free as i64),
@@ -211,6 +248,14 @@ fn collect_disk_space(out: &mut Vec<MetricSample>, mounts: &[String]) {
                     &[("mount", mount.clone())],
                 ));
             }
+            if inodes_total > 0 {
+                let pct = (inodes_total - inodes_free) as f64 / inodes_total as f64 * 100.0;
+                out.push(sample(
+                    "disk_inodes_used_percent",
+                    MetricValue::Float(pct),
+                    &[("mount", mount.clone())],
+                ));
+            }
         }
     }
 }
@@ -220,6 +265,10 @@ fn collect_system(out: &mut Vec<MetricSample>) {
     // aggregation so it is never summed across the window).
     if let Some(n) = read_process_count() {
         out.push(sample("process_count", MetricValue::Int(n as i64), &[]));
+    }
+    if let Some((used, max)) = read_fd_count() {
+        out.push(sample("fd_used", MetricValue::Int(used as i64), &[]));
+        out.push(sample("fd_max", MetricValue::Int(max as i64), &[]));
     }
 }
 
@@ -340,15 +389,22 @@ fn read_diskstats() -> HashMap<String, DiskCounters> {
         if dev.starts_with("loop") || dev.starts_with("ram") || dev.starts_with("sr") {
             continue;
         }
+        // /proc/diskstats field layout (0-based after split):
+        //   2: device  3: reads_completed  5: sectors_read  7: writes_completed
+        //   9: sectors_written  12: ms_doing_io
         map.insert(dev.to_string(), DiskCounters {
-            read_sectors: fields[5].parse().unwrap_or(0),
+            read_sectors:  fields[5].parse().unwrap_or(0),
             write_sectors: fields[9].parse().unwrap_or(0),
+            read_ops:      fields[3].parse().unwrap_or(0),
+            write_ops:     fields[7].parse().unwrap_or(0),
+            io_ms:         fields.get(12).and_then(|s| s.parse().ok()),
         });
     }
     map
 }
 
-fn disk_free(path: &str) -> Option<(u64, u64)> {
+/// Returns `(free_bytes, total_bytes, inodes_free, inodes_total)` for `path`.
+fn disk_statvfs(path: &str) -> Option<(u64, u64, u64, u64)> {
     let c_path = std::ffi::CString::new(path).ok()?;
     let mut stat: libc::statvfs = unsafe { std::mem::zeroed() };
     let ret = unsafe { libc::statvfs(c_path.as_ptr(), &mut stat) };
@@ -356,6 +412,8 @@ fn disk_free(path: &str) -> Option<(u64, u64)> {
         Some((
             stat.f_bavail as u64 * stat.f_frsize as u64,
             stat.f_blocks as u64 * stat.f_frsize as u64,
+            stat.f_favail as u64,
+            stat.f_files as u64,
         ))
     } else {
         None
@@ -366,7 +424,9 @@ fn read_net_dev() -> HashMap<String, NetCounters> {
     let mut map = HashMap::new();
     let Ok(content) = std::fs::read_to_string("/proc/net/dev") else { return map };
     for line in content.lines().skip(2) {
-        // Format: "  iface: rx_bytes rx_pkts rx_errs ... tx_bytes tx_pkts tx_errs ..."
+        // Format: "  iface: rx_bytes rx_pkts rx_errs rx_drop ... tx_bytes tx_pkts tx_errs tx_drop ..."
+        // Fields (0-based): 0=rx_bytes 1=rx_pkts 2=rx_errs 3=rx_drop
+        //                   8=tx_bytes 9=tx_pkts 10=tx_errs 11=tx_drop
         let Some(colon) = line.find(':') else { continue };
         let iface = line[..colon].trim();
         if iface == "lo" {
@@ -376,14 +436,16 @@ fn read_net_dev() -> HashMap<String, NetCounters> {
             .split_ascii_whitespace()
             .filter_map(|s| s.parse().ok())
             .collect();
-        if fields.len() < 11 {
+        if fields.len() < 12 {
             continue;
         }
         map.insert(iface.to_string(), NetCounters {
-            rx_bytes: fields[0],
-            tx_bytes: fields[8],
+            rx_bytes:  fields[0],
+            tx_bytes:  fields[8],
             rx_errors: fields[2],
             tx_errors: fields[10],
+            rx_drops:  fields[3],
+            tx_drops:  fields[11],
         });
     }
     map
@@ -399,6 +461,16 @@ fn read_process_count() -> Option<u32> {
         .nth(1)?
         .parse()
         .ok()
+}
+
+/// Returns `(allocated_fds, max_fds)` from `/proc/sys/fs/file-nr`.
+fn read_fd_count() -> Option<(u64, u64)> {
+    let s = std::fs::read_to_string("/proc/sys/fs/file-nr").ok()?;
+    let mut it = s.split_ascii_whitespace();
+    let used: u64 = it.next()?.parse().ok()?;
+    let _legacy_free: u64 = it.next()?.parse().ok()?; // always 0 on Linux 2.6+
+    let max: u64 = it.next()?.parse().ok()?;
+    Some((used, max))
 }
 
 // ---------------------------------------------------------------------------
