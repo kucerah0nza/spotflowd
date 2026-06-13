@@ -142,6 +142,25 @@ pub async fn run(
                 }
 
                 let mut ready = agg.ingest(samples, uptime_ms);
+
+                // uptime_ms is a gauge — it must NOT be aggregated (summed).
+                // Emit it directly as a raw reading on every tick so the
+                // platform always sees the true instantaneous uptime.
+                if cfg.enabled {
+                    let seq = agg.next_seq("uptime_ms");
+                    ready.push(ReadyMetric {
+                        name: "uptime_ms".to_string(),
+                        agg_cbor: AGG_NONE,
+                        labels: vec![],
+                        sum: uptime_ms as f64,
+                        count: None,
+                        min: None,
+                        max: None,
+                        seq,
+                        uptime_ms,
+                    });
+                }
+
                 pending.append(&mut ready);
 
                 // Cap the pending buffer to avoid unbounded memory growth when offline.

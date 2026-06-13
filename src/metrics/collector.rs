@@ -81,7 +81,7 @@ impl Collector {
             self.collect_network(&mut samples, filter);
         }
         if cfg.groups.system {
-            collect_system(&mut samples, uptime_ms);
+            collect_system(&mut samples);
         }
 
         (samples, uptime_ms)
@@ -215,12 +215,9 @@ fn collect_disk_space(out: &mut Vec<MetricSample>, mounts: &[String]) {
     }
 }
 
-fn collect_system(out: &mut Vec<MetricSample>, uptime_ms: u64) {
-    out.push(sample(
-        "uptime_ms",
-        MetricValue::Int(uptime_ms as i64),
-        &[],
-    ));
+fn collect_system(out: &mut Vec<MetricSample>) {
+    // uptime_ms is emitted directly as a raw ReadyMetric in mod.rs (bypasses
+    // aggregation so it is never summed across the window).
     if let Some(n) = read_process_count() {
         out.push(sample("process_count", MetricValue::Int(n as i64), &[]));
     }

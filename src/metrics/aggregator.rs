@@ -165,7 +165,7 @@ impl Aggregator {
         Ok(())
     }
 
-    fn next_seq(&mut self, key: &str) -> u64 {
+    pub fn next_seq(&mut self, key: &str) -> u64 {
         let seq = self.seq.entry(key.to_string()).or_insert(0);
         *seq += 1;
         *seq
