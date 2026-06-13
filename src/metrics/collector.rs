@@ -1,13 +1,13 @@
 //! OS metric collector — reads /proc and /sys on each tick.
 //!
-//! Counter metrics (disk I/O, network rx/tx) emit deltas between consecutive
-//! readings rather than raw cumulative totals.  This means "sum over a 1-minute
-//! aggregation window" equals "total bytes transferred in that minute", which
-//! is the most useful representation for the Spotflow platform.
+//! Counter metrics (disk I/O, network rx/tx) are sent as **absolute cumulative
+//! totals**, matching the Zephyr SDK convention.  The Spotflow platform computes
+//! deltas and rates server-side.
 //!
-//! On the very first tick there is no previous reading, so delta metrics
-//! produce no samples.  Gauge metrics (CPU%, memory, temperature) emit on
-//! every tick.
+//! `disk_io_util_percent` is the one exception — it is a derived gauge with no
+//! Zephyr equivalent, so we compute it locally from consecutive io_ms readings.
+//!
+//! Gauge metrics (CPU%, memory, temperature) emit on every tick.
 
 use super::{MetricSample, MetricValue};
 use crate::config::MetricsConfig;
@@ -52,7 +52,6 @@ pub struct Collector {
     prev_cpu: Option<CpuTicks>,
     prev_disk: HashMap<String, DiskCounters>,
     prev_disk_time: Option<Instant>,
-    prev_net: HashMap<String, NetCounters>,
 }
 
 impl Collector {
@@ -61,7 +60,6 @@ impl Collector {
             prev_cpu: None,
             prev_disk: HashMap::new(),
             prev_disk_time: None,
-            prev_net: HashMap::new(),
         }
     }
 
@@ -125,17 +123,15 @@ impl Collector {
 
         let curr = read_diskstats();
         for (dev, c) in &curr {
-            if let Some(p) = self.prev_disk.get(dev) {
-                let lbl = &[("device", dev.clone())];
-                let read_bytes = c.read_sectors.saturating_sub(p.read_sectors) * 512;
-                let write_bytes = c.write_sectors.saturating_sub(p.write_sectors) * 512;
-                let read_ops = c.read_ops.saturating_sub(p.read_ops);
-                let write_ops = c.write_ops.saturating_sub(p.write_ops);
-                out.push(sample("disk_read_bytes", MetricValue::Int(read_bytes as i64), lbl));
-                out.push(sample("disk_write_bytes", MetricValue::Int(write_bytes as i64), lbl));
-                out.push(sample("disk_read_ops", MetricValue::Int(read_ops as i64), lbl));
-                out.push(sample("disk_write_ops", MetricValue::Int(write_ops as i64), lbl));
-                if elapsed_ms > 0 {
+            let lbl = &[("device", dev.clone())];
+            // Absolute cumulative counters — platform computes deltas server-side.
+            out.push(sample("disk_read_bytes", MetricValue::Int((c.read_sectors * 512) as i64), lbl));
+            out.push(sample("disk_write_bytes", MetricValue::Int((c.write_sectors * 512) as i64), lbl));
+            out.push(sample("disk_read_ops", MetricValue::Int(c.read_ops as i64), lbl));
+            out.push(sample("disk_write_ops", MetricValue::Int(c.write_ops as i64), lbl));
+            // io_util% is a derived gauge — computed locally from consecutive io_ms readings.
+            if elapsed_ms > 0 {
+                if let Some(p) = self.prev_disk.get(dev) {
                     if let (Some(curr_io), Some(prev_io)) = (c.io_ms, p.io_ms) {
                         let io_ms_delta = curr_io.saturating_sub(prev_io);
                         let util = (io_ms_delta as f64 / elapsed_ms as f64 * 100.0).min(100.0);
@@ -151,48 +147,22 @@ impl Collector {
     // --- Network ---
 
     fn collect_network(&mut self, out: &mut Vec<MetricSample>, filter: Option<&Vec<String>>) {
-        let curr = read_net_dev();
-        for (iface, c) in &curr {
+        // Absolute cumulative counters — platform computes deltas server-side,
+        // matching the Zephyr SDK convention.
+        for (iface, c) in &read_net_dev() {
             if let Some(f) = filter {
                 if !f.contains(iface) {
                     continue;
                 }
             }
-            if let Some(p) = self.prev_net.get(iface) {
-                let lbl = &[("interface", iface.clone())];
-                out.push(sample(
-                    "network_rx_bytes",
-                    MetricValue::Int(c.rx_bytes.saturating_sub(p.rx_bytes) as i64),
-                    lbl,
-                ));
-                out.push(sample(
-                    "network_tx_bytes",
-                    MetricValue::Int(c.tx_bytes.saturating_sub(p.tx_bytes) as i64),
-                    lbl,
-                ));
-                out.push(sample(
-                    "net_rx_errors",
-                    MetricValue::Int(c.rx_errors.saturating_sub(p.rx_errors) as i64),
-                    lbl,
-                ));
-                out.push(sample(
-                    "net_tx_errors",
-                    MetricValue::Int(c.tx_errors.saturating_sub(p.tx_errors) as i64),
-                    lbl,
-                ));
-                out.push(sample(
-                    "net_rx_drops",
-                    MetricValue::Int(c.rx_drops.saturating_sub(p.rx_drops) as i64),
-                    lbl,
-                ));
-                out.push(sample(
-                    "net_tx_drops",
-                    MetricValue::Int(c.tx_drops.saturating_sub(p.tx_drops) as i64),
-                    lbl,
-                ));
-            }
+            let lbl = &[("interface", iface.clone())];
+            out.push(sample("network_rx_bytes", MetricValue::Int(c.rx_bytes as i64), lbl));
+            out.push(sample("network_tx_bytes", MetricValue::Int(c.tx_bytes as i64), lbl));
+            out.push(sample("net_rx_errors",    MetricValue::Int(c.rx_errors as i64), lbl));
+            out.push(sample("net_tx_errors",    MetricValue::Int(c.tx_errors as i64), lbl));
+            out.push(sample("net_rx_drops",     MetricValue::Int(c.rx_drops as i64),  lbl));
+            out.push(sample("net_tx_drops",     MetricValue::Int(c.tx_drops as i64),  lbl));
         }
-        self.prev_net = curr;
     }
 }
 
