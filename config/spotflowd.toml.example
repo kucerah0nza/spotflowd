@@ -61,7 +61,7 @@ cpu     = true   # cpu_usage_percent, load averages, temperature
 memory  = true   # mem_used_percent, mem_available_bytes, swap_used_percent
 disk    = true   # disk_free_bytes, disk_used_percent, disk_read_bytes, disk_write_bytes
 network = true   # network_rx_bytes, network_tx_bytes, net_rx_errors, net_tx_errors
-system  = true   # uptime_seconds, process_count
+system  = true   # uptime_ms, process_count
 
 [metrics.disk]
 # Mount points to report disk space for.

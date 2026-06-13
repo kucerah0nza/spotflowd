@@ -217,8 +217,8 @@ fn collect_disk_space(out: &mut Vec<MetricSample>, mounts: &[String]) {
 
 fn collect_system(out: &mut Vec<MetricSample>, uptime_ms: u64) {
     out.push(sample(
-        "uptime_seconds",
-        MetricValue::Int((uptime_ms / 1000) as i64),
+        "uptime_ms",
+        MetricValue::Int(uptime_ms as i64),
         &[],
     ));
     if let Some(n) = read_process_count() {
