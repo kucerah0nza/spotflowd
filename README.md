@@ -183,10 +183,10 @@ Metric groups (all enabled by default):
 
 | Group | Metrics |
 |---|---|
-| `cpu` | `cpu_usage_percent`, `cpu_load_avg_1m/5m/15m`, `cpu_temperature` |
+| `cpu` | `cpu_utilization_percent`, `cpu_load_avg_1m/5m/15m`, `cpu_temperature` |
 | `memory` | `mem_available_bytes`, `mem_used_percent`, `swap_used_percent` |
 | `disk` | `disk_free_bytes`, `disk_used_percent`, `disk_read_bytes`, `disk_write_bytes` |
-| `network` | `net_rx_bytes`, `net_tx_bytes`, `net_rx_errors`, `net_tx_errors` |
+| `network` | `network_rx_bytes`, `network_tx_bytes`, `net_rx_errors`, `net_tx_errors` |
 | `system` | `uptime_seconds`, `process_count` |
 
 Disable a group to reduce traffic on constrained devices:

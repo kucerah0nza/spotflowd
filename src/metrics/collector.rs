@@ -99,7 +99,7 @@ impl Collector {
             let idle_d = ticks.idle.saturating_sub(prev.idle);
             if total_d > 0 {
                 let pct = (total_d - idle_d) as f64 / total_d as f64 * 100.0;
-                out.push(sample("cpu_usage_percent", MetricValue::Float(pct), &[]));
+                out.push(sample("cpu_utilization_percent", MetricValue::Float(pct), &[]));
             }
         }
         self.prev_cpu = Some(ticks);
@@ -134,12 +134,12 @@ impl Collector {
             if let Some(p) = self.prev_net.get(iface) {
                 let lbl = &[("interface", iface.clone())];
                 out.push(sample(
-                    "net_rx_bytes",
+                    "network_rx_bytes",
                     MetricValue::Int(c.rx_bytes.saturating_sub(p.rx_bytes) as i64),
                     lbl,
                 ));
                 out.push(sample(
-                    "net_tx_bytes",
+                    "network_tx_bytes",
                     MetricValue::Int(c.tx_bytes.saturating_sub(p.tx_bytes) as i64),
                     lbl,
                 ));
