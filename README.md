@@ -292,7 +292,7 @@ cargo build --release --no-default-features
 | No logs in Spotflow dashboard | Both log sources disabled | Set `journald = true` or `syslog = true` under `[logs]` |
 | Duplicate log entries | Both `journald` and `syslog` enabled on systemd | Set `syslog = false` under `[logs]` (default on systemd builds) |
 | No metrics in dashboard | Metrics not enabled | Set `enabled = true` under `[metrics]` and restart |
-| Metrics appear with gaps | MQTT was offline at aggregation window boundary | Expected — buffered metrics are retried on reconnect; raw samples during the outage are lost |
+| Metrics appear with gaps | MQTT was offline for an extended period | Metrics are buffered in memory during outages and retried on reconnect; if offline long enough to exceed the 1000-entry buffer, the oldest readings are dropped |
 
 ## Roadmap
 

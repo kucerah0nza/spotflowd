@@ -146,7 +146,7 @@ pub async fn run(
                 // uptime_ms is a gauge — it must NOT be aggregated (summed).
                 // Emit it directly as a raw reading on every tick so the
                 // platform always sees the true instantaneous uptime.
-                if cfg.enabled {
+                if cfg.enabled && cfg.groups.system {
                     let seq = agg.next_seq("uptime_ms");
                     ready.push(ReadyMetric {
                         name: "uptime_ms".to_string(),
