@@ -219,7 +219,8 @@ Connect, send one or more lines, then close. No response is sent back.
 
 **Shell (one-liner):**
 ```bash
-echo '{"name":"queue_depth","value":42}' | nc -U /run/spotflow/metrics.sock
+# -N closes the connection after stdin EOF (required with netcat-openbsd)
+echo '{"name":"queue_depth","value":42}' | nc -UN /run/spotflow/metrics.sock
 ```
 
 **Python:**
