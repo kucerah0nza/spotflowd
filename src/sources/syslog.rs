@@ -7,6 +7,7 @@
 //! Parses both RFC 3164 and RFC 5424 syslog formats. Falls back to treating
 //! the whole line as the message body if parsing fails.
 
+use super::strip_ansi;
 use crate::log_entry::{LabelValue, LogEntry, Severity};
 use std::collections::HashMap;
 use anyhow::Result;
@@ -97,26 +98,47 @@ fn base_labels() -> HashMap<String, LabelValue> {
 }
 
 fn parse_line(line: &str) -> LogEntry {
-    // Try RFC 5424 first: `<PRI>1 TIMESTAMP HOSTNAME APP-NAME PROCID MSGID SD MSG`
-    if let Some(entry) = try_rfc5424(line) {
-        return entry;
+    let mut entry = try_rfc5424(line)
+        .or_else(|| try_rfc3164(line))
+        .or_else(|| try_rsyslog_default(line))
+        .unwrap_or_else(|| LogEntry {
+            body: line.to_string(),
+            severity: None,
+            timestamp_ms: None,
+            uptime_ms: None,
+            source: "syslog".to_string(),
+            labels: base_labels(),
+        });
+
+    // Strip ANSI escape codes from body (e.g. from tracing-subscriber colour output).
+    entry.body = strip_ansi(&entry.body);
+
+    // When the syslog format carries no PRI (rsyslog default, fallback), try to
+    // infer severity from a tracing-formatted body: "TIMESTAMP  LEVEL target: msg".
+    if entry.severity.is_none() {
+        entry.severity = infer_tracing_severity(&entry.body);
     }
-    // Try RFC 3164: `<PRI>TIMESTAMP HOSTNAME TAG: MSG`
-    if let Some(entry) = try_rfc3164(line) {
-        return entry;
+
+    entry
+}
+
+/// Try to infer severity from a `tracing`-formatted log body, e.g.:
+///   `2026-06-13T19:26:54.351Z  WARN spotflowd::mqtt: message`
+/// Returns None if the pattern is not recognised.
+fn infer_tracing_severity(body: &str) -> Option<Severity> {
+    let mut it = body.split_ascii_whitespace();
+    // First token must look like an ISO 8601 / RFC 3339 timestamp.
+    let ts = it.next()?;
+    if !ts.contains('T') || !ts.contains(':') {
+        return None;
     }
-    // Try rsyslog default (no <PRI>): `TIMESTAMP HOSTNAME TAG[PID]: MSG`
-    if let Some(entry) = try_rsyslog_default(line) {
-        return entry;
-    }
-    // Fallback: treat whole line as message body; no priority info available.
-    LogEntry {
-        body: line.to_string(),
-        severity: None,
-        timestamp_ms: None,
-        uptime_ms: None,
-        source: "syslog".to_string(),
-        labels: base_labels(),
+    match it.next()? {
+        "ERROR" => Some(Severity::Error),
+        "WARN"  => Some(Severity::Warning),
+        "INFO"  => Some(Severity::Info),
+        "DEBUG" => Some(Severity::Debug),
+        "TRACE" => Some(Severity::Debug),
+        _       => None,
     }
 }
 
@@ -441,6 +463,45 @@ mod tests {
         assert_eq!(e.body, "some unrecognised log line here");
         assert_eq!(e.severity, None);
         assert_eq!(label_str(&e, "source").as_deref(), Some("syslog"));
+    }
+
+    // --- ANSI stripping ---
+
+    #[test]
+    fn ansi_codes_stripped_from_body() {
+        // Simulate a tracing-subscriber coloured line reaching syslog.
+        let line = "2026-06-13T19:26:55+00:00 debian spotflowd[2016]: \
+            \x1b[2m2026-06-13T19:26:54Z\x1b[0m \x1b[33m WARN\x1b[0m \
+            \x1b[2mspotflowd::mqtt\x1b[0m\x1b[2m:\x1b[0m MQTT connection lost";
+        let e = parse_line(line);
+        assert!(!e.body.contains('\x1b'), "body must not contain ESC");
+        assert!(!e.body.contains("[33m"), "body must not contain raw ANSI params");
+        assert!(e.body.contains("MQTT connection lost"));
+    }
+
+    #[test]
+    fn tracing_severity_inferred_from_body() {
+        // rsyslog default format carries no PRI; severity must be inferred.
+        let line = "2026-06-13T19:26:55+00:00 debian spotflowd[2016]: \
+            2026-06-13T19:26:54Z  WARN spotflowd::mqtt: connection lost";
+        let e = parse_line(line);
+        assert_eq!(e.severity, Some(Severity::Warning));
+    }
+
+    #[test]
+    fn tracing_severity_error_inferred() {
+        let line = "2026-06-13T19:26:55+00:00 debian spotflowd[2016]: \
+            2026-06-13T19:26:54Z ERROR spotflowd::buf: write failed";
+        let e = parse_line(line);
+        assert_eq!(e.severity, Some(Severity::Error));
+    }
+
+    #[test]
+    fn non_tracing_body_leaves_severity_none() {
+        // rsyslog default line whose body is a plain message, not tracing format.
+        let line = "2026-06-13T19:26:55+00:00 debian nginx[100]: GET / HTTP/1.1 200";
+        let e = parse_line(line);
+        assert_eq!(e.severity, None);
     }
 
     // --- B2: BOM stripping ---

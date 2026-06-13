@@ -19,6 +19,7 @@ async fn main() -> Result<()> {
         .with_env_filter(
             EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
         )
+        .with_ansi(false) // ANSI codes in syslog/journald produce unreadable log bodies
         .init();
 
     // Config path: first CLI argument or the default.

@@ -4,6 +4,7 @@
 //! to a `LogEntry` and sending it to the shared channel.
 //! Uses `spawn_blocking` because the systemd journal API is synchronous.
 
+use super::strip_ansi;
 use crate::log_entry::{LabelValue, LogEntry, Severity};
 use std::collections::HashMap;
 use anyhow::Result;
@@ -58,7 +59,7 @@ fn run_blocking(tx: mpsc::Sender<LogEntry>, shutdown: Arc<AtomicBool>) -> Result
 }
 
 fn entry_to_log(entry: &std::collections::BTreeMap<String, String>) -> Option<LogEntry> {
-    let body = entry.get("MESSAGE")?.clone();
+    let body = strip_ansi(entry.get("MESSAGE")?);
     if body.is_empty() {
         return None;
     }
