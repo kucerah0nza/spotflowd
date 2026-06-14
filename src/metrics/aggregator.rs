@@ -107,8 +107,10 @@ impl Aggregator {
             let key = stream_key(&s.name, &s.labels);
             let v = s.value.as_f64();
 
-            if self.agg_duration.is_none() {
-                // AGG_NONE: publish immediately as a raw sample.
+            if self.agg_duration.is_none() || s.counter {
+                // AGG_NONE or cumulative counter: publish immediately as a raw
+                // sample.  Counters must never be summed — the platform computes
+                // deltas server-side.
                 let seq = self.next_seq(&key);
                 ready.push(ReadyMetric {
                     name: s.name,

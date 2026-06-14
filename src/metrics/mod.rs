@@ -64,6 +64,10 @@ pub struct MetricSample {
     pub value: MetricValue,
     /// (key, value) pairs. Sorted by key for consistent stream-key generation.
     pub labels: Vec<(String, String)>,
+    /// True for absolute cumulative counters (e.g. network_rx_bytes).
+    /// These bypass aggregation and are always emitted as raw values —
+    /// the Spotflow platform computes deltas server-side.
+    pub counter: bool,
 }
 
 /// A metric ready to publish — either raw (agg=none) or fully aggregated.

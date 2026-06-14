@@ -129,22 +129,22 @@ impl Collector {
         for (dev, c) in &curr {
             let lbl = &[("device", dev.clone())];
             // Absolute cumulative counters — platform computes deltas server-side.
-            out.push(sample(
+            out.push(counter_sample(
                 "disk_read_bytes",
                 MetricValue::Int((c.read_sectors * 512) as i64),
                 lbl,
             ));
-            out.push(sample(
+            out.push(counter_sample(
                 "disk_write_bytes",
                 MetricValue::Int((c.write_sectors * 512) as i64),
                 lbl,
             ));
-            out.push(sample(
+            out.push(counter_sample(
                 "disk_read_ops",
                 MetricValue::Int(c.read_ops as i64),
                 lbl,
             ));
-            out.push(sample(
+            out.push(counter_sample(
                 "disk_write_ops",
                 MetricValue::Int(c.write_ops as i64),
                 lbl,
@@ -181,32 +181,32 @@ fn collect_network(out: &mut Vec<MetricSample>, filter: Option<&Vec<String>>) {
             }
         }
         let lbl = &[("interface", iface.clone())];
-        out.push(sample(
+        out.push(counter_sample(
             "network_rx_bytes",
             MetricValue::Int(c.rx_bytes as i64),
             lbl,
         ));
-        out.push(sample(
+        out.push(counter_sample(
             "network_tx_bytes",
             MetricValue::Int(c.tx_bytes as i64),
             lbl,
         ));
-        out.push(sample(
+        out.push(counter_sample(
             "net_rx_errors",
             MetricValue::Int(c.rx_errors as i64),
             lbl,
         ));
-        out.push(sample(
+        out.push(counter_sample(
             "net_tx_errors",
             MetricValue::Int(c.tx_errors as i64),
             lbl,
         ));
-        out.push(sample(
+        out.push(counter_sample(
             "net_rx_drops",
             MetricValue::Int(c.rx_drops as i64),
             lbl,
         ));
-        out.push(sample(
+        out.push(counter_sample(
             "net_tx_drops",
             MetricValue::Int(c.tx_drops as i64),
             lbl,
@@ -540,5 +540,24 @@ fn sample(
             .iter()
             .map(|(k, v)| (k.to_string(), v.clone()))
             .collect(),
+        counter: false,
+    }
+}
+
+/// Like `sample`, but marks the metric as a cumulative counter.
+/// Counters bypass aggregation and are always emitted as raw values.
+fn counter_sample(
+    name: &'static str,
+    value: MetricValue,
+    labels: &[(&'static str, String)],
+) -> MetricSample {
+    MetricSample {
+        name: name.to_string(),
+        value,
+        labels: labels
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.clone()))
+            .collect(),
+        counter: true,
     }
 }

@@ -108,6 +108,7 @@ async fn handle_connection(stream: tokio::net::UnixStream, tx: mpsc::Sender<Metr
                     name: msg.name,
                     value: MetricValue::Float(msg.value),
                     labels,
+                    counter: false,
                 };
                 if tx.try_send(sample).is_err() {
                     // Channel is full — the metrics loop isn't keeping up.
