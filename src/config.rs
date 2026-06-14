@@ -7,7 +7,9 @@ pub const DEFAULT_CONFIG_PATH: &str = "/etc/spotflow/spotflowd.toml";
 #[derive(Debug, Clone, Deserialize)]
 pub struct Config {
     pub device: DeviceConfig,
+    #[serde(default)]
     pub mqtt: MqttConfig,
+    #[serde(default)]
     pub logs: LogsConfig,
     #[serde(default)]
     pub metrics: MetricsConfig,
@@ -137,6 +139,16 @@ pub struct MqttConfig {
     pub port: u16,
     #[serde(default = "default_keepalive_secs")]
     pub keepalive_secs: u64,
+}
+
+impl Default for MqttConfig {
+    fn default() -> Self {
+        Self {
+            broker: default_broker(),
+            port: default_port(),
+            keepalive_secs: default_keepalive_secs(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
