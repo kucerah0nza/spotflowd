@@ -29,33 +29,57 @@ pub async fn publish_metrics(publisher: &MqttPublisher, metrics: &[ReadyMetric])
 
 fn encode_metric(m: &ReadyMetric) -> Result<Vec<u8>> {
     let mut map = vec![
-        (CborValue::Integer(0u64.into()), CborValue::Integer(MESSAGE_TYPE_METRIC.into())),
-        (CborValue::Integer(21u64.into()), CborValue::Text(m.name.clone())),
-        (CborValue::Integer(22u64.into()), CborValue::Integer((m.agg_cbor as u64).into())),
+        (
+            CborValue::Integer(0u64.into()),
+            CborValue::Integer(MESSAGE_TYPE_METRIC.into()),
+        ),
+        (
+            CborValue::Integer(21u64.into()),
+            CborValue::Text(m.name.clone()),
+        ),
+        (
+            CborValue::Integer(22u64.into()),
+            CborValue::Integer((m.agg_cbor as u64).into()),
+        ),
     ];
 
     if !m.labels.is_empty() {
-        let label_map: Vec<(CborValue, CborValue)> = m.labels
+        let label_map: Vec<(CborValue, CborValue)> = m
+            .labels
             .iter()
             .map(|(k, v)| (CborValue::Text(k.clone()), CborValue::Text(v.clone())))
             .collect();
         map.push((CborValue::Integer(5u64.into()), CborValue::Map(label_map)));
     }
 
-    map.push((CborValue::Integer(6u64.into()), CborValue::Integer(m.uptime_ms.into())));
-    map.push((CborValue::Integer(13u64.into()), CborValue::Integer(m.seq.into())));
+    map.push((
+        CborValue::Integer(6u64.into()),
+        CborValue::Integer(m.uptime_ms.into()),
+    ));
+    map.push((
+        CborValue::Integer(13u64.into()),
+        CborValue::Integer(m.seq.into()),
+    ));
     map.push((CborValue::Integer(24u64.into()), cbor_number(m.sum)));
 
     // count/min/max only for aggregated intervals (omitted for AGG_NONE per spec).
     if let Some(count) = m.count {
-        map.push((CborValue::Integer(26u64.into()), CborValue::Integer(count.into())));
-        map.push((CborValue::Integer(27u64.into()), cbor_number(m.min.unwrap_or(m.sum))));
-        map.push((CborValue::Integer(28u64.into()), cbor_number(m.max.unwrap_or(m.sum))));
+        map.push((
+            CborValue::Integer(26u64.into()),
+            CborValue::Integer(count.into()),
+        ));
+        map.push((
+            CborValue::Integer(27u64.into()),
+            cbor_number(m.min.unwrap_or(m.sum)),
+        ));
+        map.push((
+            CborValue::Integer(28u64.into()),
+            cbor_number(m.max.unwrap_or(m.sum)),
+        ));
     }
 
     let mut buf = Vec::new();
-    ciborium::into_writer(&CborValue::Map(map), &mut buf)
-        .context("CBOR encode metric failed")?;
+    ciborium::into_writer(&CborValue::Map(map), &mut buf).context("CBOR encode metric failed")?;
     Ok(buf)
 }
 

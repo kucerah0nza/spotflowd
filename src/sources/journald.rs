@@ -6,8 +6,8 @@
 
 use super::strip_ansi;
 use crate::log_entry::{LabelValue, LogEntry, Severity};
-use std::collections::HashMap;
 use anyhow::Result;
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;

@@ -41,8 +41,13 @@ async fn main() -> Result<()> {
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
 
     // Start the persistent MQTT connection (event loop spawned internally).
-    let publisher = mqtt::start(&cfg.device.id, &cfg.device.ingest_key, &cfg.mqtt, shutdown_rx.clone())
-        .context("failed to start MQTT client")?;
+    let publisher = mqtt::start(
+        &cfg.device.id,
+        &cfg.device.ingest_key,
+        &cfg.mqtt,
+        shutdown_rx.clone(),
+    )
+    .context("failed to start MQTT client")?;
 
     // Signal handler task — listens for SIGTERM and SIGINT.
     tokio::spawn(async move {

@@ -57,7 +57,9 @@ pub async fn run(
         let publisher_clone = publisher.clone();
         let shutdown_rx = shutdown.clone();
         tokio::spawn(async move {
-            if let Err(e) = crate::metrics::run(metrics_cfg, seq_dir, publisher_clone, shutdown_rx).await {
+            if let Err(e) =
+                crate::metrics::run(metrics_cfg, seq_dir, publisher_clone, shutdown_rx).await
+            {
                 error!("metrics task failed: {e}");
             }
         });
@@ -195,7 +197,10 @@ async fn publish_tick(publisher: &MqttPublisher, buffer: &Arc<Mutex<Buffer>>) {
                 // published == 0: leave chunk on disk for retry next tick.
             }
             Err(e) => {
-                warn!("failed to read chunk {}: {e} — deleting corrupt chunk", chunk_path.display());
+                warn!(
+                    "failed to read chunk {}: {e} — deleting corrupt chunk",
+                    chunk_path.display()
+                );
                 let _ = Buffer::delete_chunk(&chunk_path);
             }
         }

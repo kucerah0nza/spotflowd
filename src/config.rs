@@ -68,7 +68,10 @@ pub struct MetricsCustomConfig {
 
 impl Default for MetricsCustomConfig {
     fn default() -> Self {
-        Self { enabled: false, socket_path: default_custom_socket_path() }
+        Self {
+            enabled: false,
+            socket_path: default_custom_socket_path(),
+        }
     }
 }
 
@@ -88,7 +91,13 @@ pub struct MetricsGroupsConfig {
 
 impl Default for MetricsGroupsConfig {
     fn default() -> Self {
-        Self { cpu: true, memory: true, disk: true, network: true, system: true }
+        Self {
+            cpu: true,
+            memory: true,
+            disk: true,
+            network: true,
+            system: true,
+        }
     }
 }
 
@@ -101,7 +110,9 @@ pub struct MetricsDiskConfig {
 
 impl Default for MetricsDiskConfig {
     fn default() -> Self {
-        Self { mount_points: default_mount_points() }
+        Self {
+            mount_points: default_mount_points(),
+        }
     }
 }
 
@@ -218,7 +229,10 @@ impl Config {
             if self.metrics.collection_interval_secs == 0 {
                 anyhow::bail!("metrics.collection_interval_secs must be > 0");
             }
-            if !matches!(self.metrics.aggregation_interval.as_str(), "none" | "1m" | "1h" | "1d") {
+            if !matches!(
+                self.metrics.aggregation_interval.as_str(),
+                "none" | "1m" | "1h" | "1d"
+            ) {
                 anyhow::bail!("metrics.aggregation_interval must be one of: none, 1m, 1h, 1d");
             }
         }

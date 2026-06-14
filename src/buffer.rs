@@ -85,7 +85,10 @@ fn drop_oldest_chunk(dir: &Path) -> Result<()> {
         .collect();
     paths.sort_unstable_by(|a, b| a.file_name().cmp(&b.file_name()));
     if let Some(oldest) = paths.first() {
-        warn!("disk spool full, dropping oldest chunk: {}", oldest.display());
+        warn!(
+            "disk spool full, dropping oldest chunk: {}",
+            oldest.display()
+        );
         fs::remove_file(oldest)?;
     }
     Ok(())
@@ -175,12 +178,15 @@ impl Buffer {
         // B4: atomic write — write to .tmp then rename so a crash mid-write
         // never leaves a partially-written chunk file.
         let tmp = path.with_extension("cbor.tmp");
-        fs::write(&tmp, &buf)
-            .with_context(|| format!("write chunk tmp {}", tmp.display()))?;
+        fs::write(&tmp, &buf).with_context(|| format!("write chunk tmp {}", tmp.display()))?;
         fs::rename(&tmp, &path)
             .with_context(|| format!("rename chunk {} → {}", tmp.display(), path.display()))?;
         self.may_have_chunks = true;
-        debug!("flushed {} entries to disk chunk {}", entries.len(), path.display());
+        debug!(
+            "flushed {} entries to disk chunk {}",
+            entries.len(),
+            path.display()
+        );
         Ok(())
     }
 

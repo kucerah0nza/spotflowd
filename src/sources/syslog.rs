@@ -9,8 +9,8 @@
 
 use super::strip_ansi;
 use crate::log_entry::{LabelValue, LogEntry, Severity};
-use std::collections::HashMap;
 use anyhow::Result;
+use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -19,12 +19,20 @@ use std::time::Duration;
 use tokio::sync::mpsc;
 use tracing::{debug, info, warn};
 
-pub async fn run(path: PathBuf, tx: mpsc::Sender<LogEntry>, shutdown: Arc<AtomicBool>) -> Result<()> {
+pub async fn run(
+    path: PathBuf,
+    tx: mpsc::Sender<LogEntry>,
+    shutdown: Arc<AtomicBool>,
+) -> Result<()> {
     tokio::task::spawn_blocking(move || run_blocking(path, tx, shutdown)).await??;
     Ok(())
 }
 
-fn run_blocking(path: PathBuf, tx: mpsc::Sender<LogEntry>, shutdown: Arc<AtomicBool>) -> Result<()> {
+fn run_blocking(
+    path: PathBuf,
+    tx: mpsc::Sender<LogEntry>,
+    shutdown: Arc<AtomicBool>,
+) -> Result<()> {
     let file = open_and_seek_end(&path)?;
     info!("syslog source tailing {}", path.display());
     let mut reader = BufReader::new(file);
@@ -135,11 +143,11 @@ fn infer_tracing_severity(body: &str) -> Option<Severity> {
     }
     match it.next()? {
         "ERROR" => Some(Severity::Error),
-        "WARN"  => Some(Severity::Warning),
-        "INFO"  => Some(Severity::Info),
+        "WARN" => Some(Severity::Warning),
+        "INFO" => Some(Severity::Info),
         "DEBUG" => Some(Severity::Debug),
         "TRACE" => Some(Severity::Debug),
-        _       => None,
+        _ => None,
     }
 }
 
@@ -269,10 +277,7 @@ fn try_rfc3164(line: &str) -> Option<LogEntry> {
 fn parse_tag(tag: &str) -> (String, Option<i64>) {
     if let Some(bracket) = tag.find('[') {
         let process = tag[..bracket].to_string();
-        let pid = tag[bracket + 1..]
-            .trim_end_matches(']')
-            .parse::<i64>()
-            .ok();
+        let pid = tag[bracket + 1..].trim_end_matches(']').parse::<i64>().ok();
         (process, pid)
     } else {
         (tag.to_string(), None)
@@ -476,7 +481,10 @@ mod tests {
             \x1b[2mspotflowd::mqtt\x1b[0m\x1b[2m:\x1b[0m MQTT connection lost";
         let e = parse_line(line);
         assert!(!e.body.contains('\x1b'), "body must not contain ESC");
-        assert!(!e.body.contains("[33m"), "body must not contain raw ANSI params");
+        assert!(
+            !e.body.contains("[33m"),
+            "body must not contain raw ANSI params"
+        );
         assert!(e.body.contains("MQTT connection lost"));
     }
 
@@ -487,7 +495,10 @@ mod tests {
             #033[2m2026-06-13T19:26:54Z#033[0m #033[33m WARN#033[0m \
             #033[2mspotflowd::mqtt#033[0m#033[2m:#033[0m MQTT connection lost";
         let e = parse_line(line);
-        assert!(!e.body.contains("#033"), "body must not contain rsyslog-escaped ESC");
+        assert!(
+            !e.body.contains("#033"),
+            "body must not contain rsyslog-escaped ESC"
+        );
         assert!(e.body.contains("MQTT connection lost"));
     }
 

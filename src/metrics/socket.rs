@@ -43,10 +43,7 @@ pub async fn run(
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
-            let _ = std::fs::set_permissions(
-                parent,
-                std::fs::Permissions::from_mode(0o755),
-            );
+            let _ = std::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o755));
         }
     }
 
@@ -61,13 +58,13 @@ pub async fn run(
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(
-            &cfg.socket_path,
-            std::fs::Permissions::from_mode(0o666),
-        )?;
+        std::fs::set_permissions(&cfg.socket_path, std::fs::Permissions::from_mode(0o666))?;
     }
 
-    info!("custom metrics socket listening on {}", cfg.socket_path.display());
+    info!(
+        "custom metrics socket listening on {}",
+        cfg.socket_path.display()
+    );
 
     loop {
         tokio::select! {
@@ -100,7 +97,10 @@ async fn handle_connection(stream: tokio::net::UnixStream, tx: mpsc::Sender<Metr
         }
         match serde_json::from_str::<IncomingMetric>(&line) {
             Ok(msg) => {
-                debug!("custom metric received: name={} value={}", msg.name, msg.value);
+                debug!(
+                    "custom metric received: name={} value={}",
+                    msg.name, msg.value
+                );
                 // Sort labels so the aggregator generates a consistent stream key.
                 let mut labels: Vec<(String, String)> = msg.labels.into_iter().collect();
                 labels.sort_by(|(a, _), (b, _)| a.cmp(b));

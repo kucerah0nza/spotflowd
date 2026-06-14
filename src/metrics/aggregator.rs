@@ -9,10 +9,7 @@
 //! Sequence numbers are stored in `<seq_dir>/metrics_seq.cbor` and loaded on
 //! startup so they survive daemon restarts.
 
-use super::{
-    AGG_1DAY, AGG_1HOUR, AGG_1MIN, AGG_NONE,
-    MetricSample, ReadyMetric,
-};
+use super::{MetricSample, ReadyMetric, AGG_1DAY, AGG_1HOUR, AGG_1MIN, AGG_NONE};
 use crate::config::MetricsConfig;
 use anyhow::Result;
 use ciborium::value::Value as CborValue;
@@ -39,14 +36,27 @@ struct StreamState {
 
 impl StreamState {
     fn new(name: String, labels: Vec<(String, String)>, v: f64, uptime_ms: u64) -> Self {
-        Self { name, labels, sum: v, count: 1, min: v, max: v, window_start: Instant::now(), uptime_ms }
+        Self {
+            name,
+            labels,
+            sum: v,
+            count: 1,
+            min: v,
+            max: v,
+            window_start: Instant::now(),
+            uptime_ms,
+        }
     }
 
     fn update(&mut self, v: f64, uptime_ms: u64) {
         self.sum += v;
         self.count += 1;
-        if v < self.min { self.min = v; }
-        if v > self.max { self.max = v; }
+        if v < self.min {
+            self.min = v;
+        }
+        if v > self.max {
+            self.max = v;
+        }
         self.uptime_ms = uptime_ms;
     }
 }
@@ -71,16 +81,22 @@ pub struct Aggregator {
 impl Aggregator {
     pub fn new(cfg: &MetricsConfig, seq_dir: PathBuf) -> Result<Self> {
         let (agg_cbor, agg_duration) = match cfg.aggregation_interval.as_str() {
-            "none" => (AGG_NONE,  None),
-            "1m"   => (AGG_1MIN,  Some(Duration::from_secs(60))),
-            "1h"   => (AGG_1HOUR, Some(Duration::from_secs(3600))),
-            "1d"   => (AGG_1DAY,  Some(Duration::from_secs(86400))),
-            other  => anyhow::bail!("unknown aggregation_interval: {other}"),
+            "none" => (AGG_NONE, None),
+            "1m" => (AGG_1MIN, Some(Duration::from_secs(60))),
+            "1h" => (AGG_1HOUR, Some(Duration::from_secs(3600))),
+            "1d" => (AGG_1DAY, Some(Duration::from_secs(86400))),
+            other => anyhow::bail!("unknown aggregation_interval: {other}"),
         };
         let seq_path = seq_dir.join("metrics_seq.cbor");
         let seq = load_seq(&seq_path);
         debug!("loaded {} persisted metric sequence numbers", seq.len());
-        Ok(Self { agg_cbor, agg_duration, states: HashMap::new(), seq, seq_path })
+        Ok(Self {
+            agg_cbor,
+            agg_duration,
+            states: HashMap::new(),
+            seq,
+            seq_path,
+        })
     }
 
     /// Feed samples from one collection tick.  Returns metrics ready to publish.
@@ -110,7 +126,8 @@ impl Aggregator {
                 if self.states.contains_key(&key) {
                     self.states.get_mut(&key).unwrap().update(v, uptime_ms);
                 } else if self.states.len() < MAX_STREAMS {
-                    self.states.insert(key, StreamState::new(s.name, s.labels, v, uptime_ms));
+                    self.states
+                        .insert(key, StreamState::new(s.name, s.labels, v, uptime_ms));
                 } else {
                     warn!("metric stream limit ({MAX_STREAMS}) reached, dropping: {key}");
                 }
@@ -120,7 +137,8 @@ impl Aggregator {
         // Flush any streams whose aggregation window has elapsed.
         if let Some(duration) = self.agg_duration {
             let now = Instant::now();
-            let expired: Vec<String> = self.states
+            let expired: Vec<String> = self
+                .states
                 .iter()
                 .filter(|(_, st)| now.duration_since(st.window_start) >= duration)
                 .map(|(k, _)| k.clone())
@@ -155,11 +173,10 @@ impl Aggregator {
         if let Some(parent) = self.seq_path.parent() {
             std::fs::create_dir_all(parent)?;
         }
-        let map: Vec<(CborValue, CborValue)> = self.seq
+        let map: Vec<(CborValue, CborValue)> = self
+            .seq
             .iter()
-            .map(|(k, v)| {
-                (CborValue::Text(k.clone()), CborValue::Integer((*v).into()))
-            })
+            .map(|(k, v)| (CborValue::Text(k.clone()), CborValue::Integer((*v).into())))
             .collect();
         let mut buf = Vec::new();
         ciborium::into_writer(&CborValue::Map(map), &mut buf)
@@ -191,7 +208,11 @@ fn stream_key(name: &str, labels: &[(String, String)]) -> String {
     let mut sorted: Vec<_> = labels.iter().collect();
     sorted.sort_by_key(|(k, _)| k.as_str());
     // Single allocation: estimate capacity and write directly.
-    let cap = name.len() + sorted.iter().map(|(k, v)| k.len() + v.len() + 2).sum::<usize>();
+    let cap = name.len()
+        + sorted
+            .iter()
+            .map(|(k, v)| k.len() + v.len() + 2)
+            .sum::<usize>();
     let mut key = String::with_capacity(cap);
     key.push_str(name);
     for (k, v) in &sorted {
@@ -217,7 +238,9 @@ fn load_seq(path: &PathBuf) -> HashMap<String, u64> {
             return HashMap::new();
         }
     };
-    let CborValue::Map(entries) = value else { return HashMap::new() };
+    let CborValue::Map(entries) = value else {
+        return HashMap::new();
+    };
     let mut map = HashMap::new();
     for (k, v) in entries {
         if let (CborValue::Text(key), CborValue::Integer(seq)) = (k, v) {

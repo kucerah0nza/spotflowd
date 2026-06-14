@@ -26,7 +26,10 @@ const INGEST_TOPIC: &str = "ingest-cbor";
 ///   1 = body, 4 = severity, 6 = deviceUptimeMs, 7 = deviceTimestampMs
 /// One MQTT message is published per entry.
 fn encode_entry(entry: &LogEntry) -> Result<Vec<u8>> {
-    let mut map = vec![(CborValue::Integer(1u64.into()), CborValue::Text(entry.body.clone()))];
+    let mut map = vec![(
+        CborValue::Integer(1u64.into()),
+        CborValue::Text(entry.body.clone()),
+    )];
     if let Some(severity) = entry.severity {
         map.push((
             CborValue::Integer(4u64.into()),
@@ -130,9 +133,9 @@ pub fn start(
     let mut options = MqttOptions::new(device_id, &cfg.broker, cfg.port);
     options.set_credentials(device_id, ingest_key);
     options.set_keep_alive(Duration::from_secs(cfg.keepalive_secs));
-    options.set_transport(Transport::tls_with_config(
-        TlsConfiguration::Rustls(build_client_config()),
-    ));
+    options.set_transport(Transport::tls_with_config(TlsConfiguration::Rustls(
+        build_client_config(),
+    )));
 
     let (client, mut eventloop) = AsyncClient::new(options, 64);
 
