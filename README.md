@@ -60,18 +60,16 @@ sudo nano /etc/spotflow/spotflowd.toml
 
 Set `device.id` and `device.ingest_key` to the values from your Spotflow dashboard.
 
-Restrict the config file so the ingest key is not world-readable:
-
-```bash
-sudo chmod 600 /etc/spotflow/spotflowd.toml
-```
-
 **5. Install and start the systemd service**
 
 ```bash
 sudo useradd -r -s /bin/false spotflow
 sudo mkdir -p /var/lib/spotflow/spool
 sudo chown spotflow:spotflow /var/lib/spotflow/spool
+
+# Let the spotflow user read the config (contains the ingest key).
+sudo chown spotflow:spotflow /etc/spotflow/spotflowd.toml
+sudo chmod 600 /etc/spotflow/spotflowd.toml
 
 sudo cp systemd/spotflowd.service /etc/systemd/system/
 sudo systemctl daemon-reload
