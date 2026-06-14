@@ -31,6 +31,7 @@ async fn main() -> Result<()> {
     let cfg = Config::load(&config_path)
         .with_context(|| format!("failed to load config from {}", config_path.display()))?;
 
+    // I1: intentionally NOT logging ingest_key — it is a secret.
     info!(
         "spotflowd starting — device_id={} broker={}:{}",
         cfg.device.id, cfg.mqtt.broker, cfg.mqtt.port

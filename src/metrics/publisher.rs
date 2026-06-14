@@ -30,7 +30,7 @@ pub async fn publish_metrics(publisher: &MqttPublisher, metrics: &[ReadyMetric])
 fn encode_metric(m: &ReadyMetric) -> Result<Vec<u8>> {
     let mut map = vec![
         (CborValue::Integer(0u64.into()), CborValue::Integer(MESSAGE_TYPE_METRIC.into())),
-        (CborValue::Integer(21u64.into()), CborValue::Text(m.name.to_string())),
+        (CborValue::Integer(21u64.into()), CborValue::Text(m.name.clone())),
         (CborValue::Integer(22u64.into()), CborValue::Integer((m.agg_cbor as u64).into())),
     ];
 

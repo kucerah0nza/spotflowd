@@ -167,19 +167,32 @@ async fn publish_tick(publisher: &MqttPublisher, buffer: &Arc<Mutex<Buffer>>) {
     if let Some(chunk_path) = next_chunk {
         match Buffer::read_chunk(&chunk_path) {
             Ok(entries) => {
-                let mut publish_ok = true;
+                let mut published = 0usize;
                 for chunk in entries.chunks(PUBLISH_BATCH_SIZE) {
                     if let Err(e) = publisher.publish_batch(chunk).await {
                         warn!("publish error (disk chunk): {e}");
-                        publish_ok = false;
                         break;
                     }
+                    published += chunk.len();
                 }
-                if publish_ok {
+                if published == entries.len() {
+                    // All entries published — delete the chunk.
                     if let Err(e) = Buffer::delete_chunk(&chunk_path) {
                         warn!("failed to delete published chunk: {e}");
                     }
+                } else if published > 0 {
+                    // B1: partial publish — rewrite chunk with only the
+                    // unpublished tail so already-sent entries aren't resent.
+                    let remaining = &entries[published..];
+                    let mut buf_lock = buffer.lock().await;
+                    for entry in remaining.iter().rev() {
+                        let _ = buf_lock.push(entry.clone());
+                    }
+                    if let Err(e) = Buffer::delete_chunk(&chunk_path) {
+                        warn!("failed to delete partially-published chunk: {e}");
+                    }
                 }
+                // published == 0: leave chunk on disk for retry next tick.
             }
             Err(e) => {
                 warn!("failed to read chunk {}: {e} — deleting corrupt chunk", chunk_path.display());

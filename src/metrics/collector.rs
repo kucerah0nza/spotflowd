@@ -34,7 +34,6 @@ struct DiskCounters {
     io_ms: Option<u64>,
 }
 
-#[derive(Clone, Default)]
 struct NetCounters {
     rx_bytes: u64,
     tx_bytes: u64,
@@ -86,7 +85,7 @@ impl Collector {
             } else {
                 Some(&cfg.network.interfaces)
             };
-            self.collect_network(&mut samples, filter);
+            collect_network(&mut samples, filter);
         }
         if cfg.groups.system {
             collect_system(&mut samples);
@@ -144,25 +143,26 @@ impl Collector {
         self.prev_disk_time = Some(now);
     }
 
-    // --- Network ---
+}
 
-    fn collect_network(&mut self, out: &mut Vec<MetricSample>, filter: Option<&Vec<String>>) {
-        // Absolute cumulative counters — platform computes deltas server-side,
-        // matching the Zephyr SDK convention.
-        for (iface, c) in &read_net_dev() {
-            if let Some(f) = filter {
-                if !f.contains(iface) {
-                    continue;
-                }
+// --- Network (no inter-tick state needed) ---
+
+fn collect_network(out: &mut Vec<MetricSample>, filter: Option<&Vec<String>>) {
+    // Absolute cumulative counters — platform computes deltas server-side,
+    // matching the Zephyr SDK convention.
+    for (iface, c) in &read_net_dev() {
+        if let Some(f) = filter {
+            if !f.contains(iface) {
+                continue;
             }
-            let lbl = &[("interface", iface.clone())];
-            out.push(sample("network_rx_bytes", MetricValue::Int(c.rx_bytes as i64), lbl));
-            out.push(sample("network_tx_bytes", MetricValue::Int(c.tx_bytes as i64), lbl));
-            out.push(sample("net_rx_errors",    MetricValue::Int(c.rx_errors as i64), lbl));
-            out.push(sample("net_tx_errors",    MetricValue::Int(c.tx_errors as i64), lbl));
-            out.push(sample("net_rx_drops",     MetricValue::Int(c.rx_drops as i64),  lbl));
-            out.push(sample("net_tx_drops",     MetricValue::Int(c.tx_drops as i64),  lbl));
         }
+        let lbl = &[("interface", iface.clone())];
+        out.push(sample("network_rx_bytes", MetricValue::Int(c.rx_bytes as i64), lbl));
+        out.push(sample("network_tx_bytes", MetricValue::Int(c.tx_bytes as i64), lbl));
+        out.push(sample("net_rx_errors",    MetricValue::Int(c.rx_errors as i64), lbl));
+        out.push(sample("net_tx_errors",    MetricValue::Int(c.tx_errors as i64), lbl));
+        out.push(sample("net_rx_drops",     MetricValue::Int(c.rx_drops as i64),  lbl));
+        out.push(sample("net_tx_drops",     MetricValue::Int(c.tx_drops as i64),  lbl));
     }
 }
 
@@ -394,9 +394,10 @@ fn read_net_dev() -> HashMap<String, NetCounters> {
     let mut map = HashMap::new();
     let Ok(content) = std::fs::read_to_string("/proc/net/dev") else { return map };
     for line in content.lines().skip(2) {
-        // Format: "  iface: rx_bytes rx_pkts rx_errs rx_drop ... tx_bytes tx_pkts tx_errs tx_drop ..."
-        // Fields (0-based): 0=rx_bytes 1=rx_pkts 2=rx_errs 3=rx_drop
-        //                   8=tx_bytes 9=tx_pkts 10=tx_errs 11=tx_drop
+        // Format: "  iface: rx_bytes rx_pkts rx_errs rx_drop rx_fifo rx_frame rx_comp rx_mcast
+        //                   tx_bytes tx_pkts tx_errs tx_drop tx_fifo tx_colls tx_carr tx_comp"
+        // Fields (0-based): 0=rx_bytes 2=rx_errs 3=rx_drop
+        //                   8=tx_bytes 10=tx_errs 11=tx_drop (requires >= 12 fields)
         let Some(colon) = line.find(':') else { continue };
         let iface = line[..colon].trim();
         if iface == "lo" {

@@ -147,6 +147,17 @@ pub struct LogsConfig {
     pub buffer: BufferConfig,
 }
 
+impl Default for LogsConfig {
+    fn default() -> Self {
+        Self {
+            journald: default_true(),
+            syslog: default_syslog(),
+            syslog_path: default_syslog_path(),
+            buffer: BufferConfig::default(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct BufferConfig {
     /// Maximum number of log entries held in memory before flushing to disk.

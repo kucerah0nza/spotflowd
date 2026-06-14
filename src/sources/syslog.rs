@@ -469,13 +469,24 @@ mod tests {
 
     #[test]
     fn ansi_codes_stripped_from_body() {
-        // Simulate a tracing-subscriber coloured line reaching syslog.
+        // Simulate a tracing-subscriber coloured line reaching syslog (real ESC bytes).
         let line = "2026-06-13T19:26:55+00:00 debian spotflowd[2016]: \
             \x1b[2m2026-06-13T19:26:54Z\x1b[0m \x1b[33m WARN\x1b[0m \
             \x1b[2mspotflowd::mqtt\x1b[0m\x1b[2m:\x1b[0m MQTT connection lost";
         let e = parse_line(line);
         assert!(!e.body.contains('\x1b'), "body must not contain ESC");
         assert!(!e.body.contains("[33m"), "body must not contain raw ANSI params");
+        assert!(e.body.contains("MQTT connection lost"));
+    }
+
+    #[test]
+    fn rsyslog_octal_escaped_ansi_stripped() {
+        // rsyslog encodes ESC (0x1b) as the literal four chars "#033" in syslog files.
+        let line = "2026-06-13T19:26:55+00:00 debian spotflowd[2016]: \
+            #033[2m2026-06-13T19:26:54Z#033[0m #033[33m WARN#033[0m \
+            #033[2mspotflowd::mqtt#033[0m#033[2m:#033[0m MQTT connection lost";
+        let e = parse_line(line);
+        assert!(!e.body.contains("#033"), "body must not contain rsyslog-escaped ESC");
         assert!(e.body.contains("MQTT connection lost"));
     }
 

@@ -143,13 +143,15 @@ impl Buffer {
     }
 
     /// Write a slice of entries as a single CBOR chunk file on disk.
+    /// Uses atomic write-then-rename so a crash mid-write never leaves a
+    /// partially-written file that would be mistaken for a corrupt chunk.
     fn write_chunk(&self, entries: &[LogEntry]) -> Result<()> {
         let dir = &self.cfg.disk_path;
         fs::create_dir_all(dir).with_context(|| format!("create spool dir {}", dir.display()))?;
 
         // Enforce max spool size: drop oldest chunks until under the limit.
         let max_bytes = self.cfg.disk_max_size_mb * 1024 * 1024;
-        while total_spool_bytes(dir) >= max_bytes {
+        while total_spool_bytes(dir) > max_bytes {
             drop_oldest_chunk(dir)?;
             // If dir is empty after dropping, stop.
             if spool_files_newest_first(dir)?.is_empty() {
@@ -161,8 +163,13 @@ impl Buffer {
         let mut buf = Vec::new();
         ciborium::into_writer(entries, &mut buf)
             .with_context(|| "CBOR serialization of chunk failed")?;
-        fs::write(&path, &buf)
-            .with_context(|| format!("write chunk {}", path.display()))?;
+        // B4: atomic write — write to .tmp then rename so a crash mid-write
+        // never leaves a partially-written chunk file.
+        let tmp = path.with_extension("cbor.tmp");
+        fs::write(&tmp, &buf)
+            .with_context(|| format!("write chunk tmp {}", tmp.display()))?;
+        fs::rename(&tmp, &path)
+            .with_context(|| format!("rename chunk {} → {}", tmp.display(), path.display()))?;
         debug!("flushed {} entries to disk chunk {}", entries.len(), path.display());
         Ok(())
     }
