@@ -112,11 +112,59 @@ The messages should appear in the Spotflow dashboard within seconds.
 
 ### Yocto (embedded Linux)
 
-Build without the journald feature (for systems without systemd):
+A ready-made BitBake meta-layer is included at `yocto/meta-spotflow/`.
+
+**1. Add the layer to your build**
 
 ```bash
-cargo build --release --no-default-features
+cd poky
+source oe-init-build-env
+
+# Copy or symlink the layer into your sources directory
+cp -r /path/to/spotflowd/yocto/meta-spotflow ../sources/meta-spotflow
+
+# Register the layer
+bitbake-layers add-layer ../sources/meta-spotflow
 ```
+
+**2. Add spotflowd to your image**
+
+In your `local.conf` or image recipe:
+
+```
+IMAGE_INSTALL:append = " spotflowd"
+```
+
+**3. Build**
+
+```bash
+bitbake your-image
+```
+
+**4. Configure the device**
+
+After first boot, edit `/etc/spotflow/spotflowd.toml` and set `device.id` and
+`device.ingest_key` to the values from your Spotflow dashboard.
+
+The daemon starts automatically via SysVinit. Manage it with:
+
+```bash
+/etc/init.d/spotflowd status
+/etc/init.d/spotflowd restart
+```
+
+**Systemd-based Yocto images:** If your image includes systemd, enable the
+`journald` feature in `local.conf`:
+
+```
+PACKAGECONFIG:append:pn-spotflowd = " journald"
+```
+
+This builds spotflowd with journald log collection in addition to syslog.
+
+**Note:** The default Yocto config ships with `syslog = true` and
+`journald = false`, since most Yocto images use BusyBox syslogd rather than
+systemd-journald.
 
 ---
 

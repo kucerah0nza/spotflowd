@@ -1,0 +1,58 @@
+#!/bin/sh
+### BEGIN INIT INFO
+# Provides:          spotflowd
+# Required-Start:    $network $remote_fs $syslog
+# Required-Stop:     $network $remote_fs $syslog
+# Default-Start:     2 3 4 5
+# Default-Stop:      0 1 6
+# Short-Description: Spotflow observability daemon
+# Description:       Collects logs and metrics from the device and streams
+#                    them to the Spotflow platform over MQTT/TLS.
+### END INIT INFO
+
+DAEMON=/usr/sbin/spotflowd
+DAEMON_ARGS="/etc/spotflow/spotflowd.toml"
+NAME=spotflowd
+DESC="Spotflow observability daemon"
+PIDFILE=/var/run/spotflowd.pid
+USER=spotflow
+GROUP=spotflow
+
+# Exit if the daemon binary is not installed.
+[ -x "$DAEMON" ] || exit 0
+
+case "$1" in
+    start)
+        echo "Starting $DESC ..."
+        start-stop-daemon --start --quiet \
+            --pidfile "$PIDFILE" --make-pidfile \
+            --background \
+            --chuid "$USER:$GROUP" \
+            --exec "$DAEMON" -- $DAEMON_ARGS
+        ;;
+    stop)
+        echo "Stopping $DESC ..."
+        start-stop-daemon --stop --quiet \
+            --pidfile "$PIDFILE" \
+            --retry=TERM/10/KILL/5
+        rm -f "$PIDFILE"
+        ;;
+    restart|force-reload)
+        $0 stop
+        $0 start
+        ;;
+    status)
+        if [ -f "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE")" 2>/dev/null; then
+            echo "$NAME is running (pid $(cat "$PIDFILE"))"
+        else
+            echo "$NAME is not running"
+            exit 1
+        fi
+        ;;
+    *)
+        echo "Usage: $0 {start|stop|restart|force-reload|status}"
+        exit 1
+        ;;
+esac
+
+exit 0
