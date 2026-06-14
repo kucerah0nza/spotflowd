@@ -11,8 +11,8 @@ name = "spotflowd"
 path = "src/main.rs"
 
 [dependencies]
-# Async runtime
-tokio = { version = "1", features = ["full"] }
+# Async runtime (minimal feature set — no unused features like io-std, process, test-util)
+tokio = { version = "1", features = ["rt-multi-thread", "sync", "time", "signal", "macros", "net", "io-util", "fs"] }
 
 # MQTT client (rumqttc with rustls TLS)
 rumqttc = { version = "0.24", default-features = false, features = ["use-rustls"] }
@@ -57,3 +57,4 @@ opt-level = "z"     # optimize for size (important for embedded targets)
 lto = true
 codegen-units = 1
 strip = true
+panic = "abort"     # no unwinding code — saves ~50KB; daemon should crash, not unwind

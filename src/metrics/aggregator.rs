@@ -17,9 +17,10 @@ use crate::config::MetricsConfig;
 use anyhow::Result;
 use ciborium::value::Value as CborValue;
 use std::collections::HashMap;
+use std::fmt::Write;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
-use tracing::debug;
+use tracing::{debug, warn};
 
 // ---------------------------------------------------------------------------
 // Per-stream accumulator
@@ -53,6 +54,11 @@ impl StreamState {
 // ---------------------------------------------------------------------------
 // Aggregator
 // ---------------------------------------------------------------------------
+
+/// Maximum number of distinct metric streams tracked simultaneously.
+/// Protects against unbounded memory growth from high-cardinality labels
+/// (e.g. unique request IDs) with long aggregation windows (1h, 1d).
+const MAX_STREAMS: usize = 10_000;
 
 pub struct Aggregator {
     agg_cbor: u8,
@@ -101,12 +107,13 @@ impl Aggregator {
                 });
             } else {
                 // Timed aggregation: accumulate into stream state.
-                let name = s.name;
-                let labels = s.labels;
-                self.states
-                    .entry(key)
-                    .and_modify(|st| st.update(v, uptime_ms))
-                    .or_insert_with(|| StreamState::new(name, labels, v, uptime_ms));
+                if self.states.contains_key(&key) {
+                    self.states.get_mut(&key).unwrap().update(v, uptime_ms);
+                } else if self.states.len() < MAX_STREAMS {
+                    self.states.insert(key, StreamState::new(s.name, s.labels, v, uptime_ms));
+                } else {
+                    warn!("metric stream limit ({MAX_STREAMS}) reached, dropping: {key}");
+                }
             }
         }
 
@@ -183,12 +190,15 @@ fn stream_key(name: &str, labels: &[(String, String)]) -> String {
     // M1: sort by key here so callers don't need to guarantee ordering.
     let mut sorted: Vec<_> = labels.iter().collect();
     sorted.sort_by_key(|(k, _)| k.as_str());
-    let label_str = sorted
-        .iter()
-        .map(|(k, v)| format!("{k}={v}"))
-        .collect::<Vec<_>>()
-        .join("|");
-    format!("{name}|{label_str}")
+    // Single allocation: estimate capacity and write directly.
+    let cap = name.len() + sorted.iter().map(|(k, v)| k.len() + v.len() + 2).sum::<usize>();
+    let mut key = String::with_capacity(cap);
+    key.push_str(name);
+    for (k, v) in &sorted {
+        key.push('|');
+        let _ = write!(key, "{k}={v}");
+    }
+    key
 }
 
 // ---------------------------------------------------------------------------

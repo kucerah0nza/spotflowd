@@ -154,7 +154,7 @@ async fn publish_tick(publisher: &MqttPublisher, buffer: &Arc<Mutex<Buffer>>) {
 
     // Disk next (older data, newest chunk first).
     let next_chunk = {
-        let buf = buffer.lock().await;
+        let mut buf = buffer.lock().await;
         match buf.next_disk_chunk() {
             Ok(p) => p,
             Err(e) => {

@@ -109,13 +109,22 @@ fn is_chunk_file(p: &Path) -> bool {
 pub struct Buffer {
     cfg: BufferConfig,
     memory: VecDeque<LogEntry>,
+    /// Tracks whether disk chunks may exist, to avoid scanning the spool
+    /// directory on every idle tick. Set when a chunk is written, cleared
+    /// when `next_disk_chunk()` returns None.
+    may_have_chunks: bool,
 }
 
 impl Buffer {
     pub fn new(cfg: BufferConfig) -> Self {
+        // Check on startup whether leftover chunks exist from a previous run.
+        let may_have_chunks = spool_files_newest_first(&cfg.disk_path)
+            .map(|v| !v.is_empty())
+            .unwrap_or(false);
         Self {
             cfg,
             memory: VecDeque::new(),
+            may_have_chunks,
         }
     }
 
@@ -145,7 +154,7 @@ impl Buffer {
     /// Write a slice of entries as a single CBOR chunk file on disk.
     /// Uses atomic write-then-rename so a crash mid-write never leaves a
     /// partially-written file that would be mistaken for a corrupt chunk.
-    fn write_chunk(&self, entries: &[LogEntry]) -> Result<()> {
+    fn write_chunk(&mut self, entries: &[LogEntry]) -> Result<()> {
         let dir = &self.cfg.disk_path;
         fs::create_dir_all(dir).with_context(|| format!("create spool dir {}", dir.display()))?;
 
@@ -170,6 +179,7 @@ impl Buffer {
             .with_context(|| format!("write chunk tmp {}", tmp.display()))?;
         fs::rename(&tmp, &path)
             .with_context(|| format!("rename chunk {} → {}", tmp.display(), path.display()))?;
+        self.may_have_chunks = true;
         debug!("flushed {} entries to disk chunk {}", entries.len(), path.display());
         Ok(())
     }
@@ -185,10 +195,18 @@ impl Buffer {
     }
 
     /// Return the path to the newest disk chunk that has not yet been published,
-    /// or `None` if the spool is empty.
-    pub fn next_disk_chunk(&self) -> Result<Option<PathBuf>> {
+    /// or `None` if the spool is empty.  Skips the directory scan entirely when
+    /// no chunks are expected (reduces I/O on flash / SD cards).
+    pub fn next_disk_chunk(&mut self) -> Result<Option<PathBuf>> {
+        if !self.may_have_chunks {
+            return Ok(None);
+        }
         let files = spool_files_newest_first(&self.cfg.disk_path)?;
-        Ok(files.into_iter().next())
+        let next = files.into_iter().next();
+        if next.is_none() {
+            self.may_have_chunks = false;
+        }
+        Ok(next)
     }
 
     /// Load and deserialize a chunk from disk.

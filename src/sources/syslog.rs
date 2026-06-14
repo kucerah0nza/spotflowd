@@ -92,7 +92,8 @@ fn inode_of(path: &Path) -> Option<u64> {
 // ---------------------------------------------------------------------------
 
 fn base_labels() -> HashMap<String, LabelValue> {
-    let mut m = HashMap::new();
+    // Capacity 5: source + hostname + process + pid + unit (typical max).
+    let mut m = HashMap::with_capacity(5);
     m.insert("source".into(), LabelValue::Str("syslog".into()));
     m
 }
