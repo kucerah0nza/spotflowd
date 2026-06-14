@@ -18,7 +18,7 @@ impl Severity {
         // Syslog severity (RFC 3164): 0=Emergency, 1=Alert, 2=Critical, 3=Error,
         // 4=Warning, 5=Notice, 6=Info, 7=Debug
         match priority & 0x07 {
-            0 | 1 | 2 => Severity::Critical,
+            0..=2 => Severity::Critical,
             3 => Severity::Error,
             4 => Severity::Warning,
             5 | 6 => Severity::Info,

@@ -116,17 +116,11 @@ impl Default for MetricsDiskConfig {
     }
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize)]
 pub struct MetricsNetworkConfig {
     /// Interfaces to report. Empty list = auto-detect all non-loopback interfaces.
     #[serde(default)]
     pub interfaces: Vec<String>,
-}
-
-impl Default for MetricsNetworkConfig {
-    fn default() -> Self {
-        Self { interfaces: vec![] }
-    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
