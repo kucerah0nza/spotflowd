@@ -2,7 +2,7 @@
 
 Linux observability daemon for the [Spotflow](https://spotflow.io) platform.
 
-Collects **logs** (journald, syslog) and **OS metrics** (CPU, memory, disk, network), buffers them locally, and streams them to Spotflow over a persistent MQTT/TLS connection.
+Collects **logs** (journald, syslog) and **OS metrics** (CPU, memory, disk, network), buffers them locally, and streams them to Spotflow over a persistent MQTT/TLS connection. Local applications can also publish **custom metrics** via a Unix domain socket.
 
 ## How it works
 
@@ -11,13 +11,16 @@ journald ──┐
            ├──▶  memory buffer  ──▶  disk spool (on overflow)  ──▶  MQTT → Spotflow
 syslog  ───┘
 
-/proc, /sys ───▶  aggregator  ──▶  MQTT → Spotflow
+/proc, /sys ──────┐
+                  ├──▶  aggregator  ──▶  MQTT → Spotflow
+metrics.sock  ────┘
 ```
 
 - **Memory-first buffer** — log entries are held in RAM (configurable size) to minimise flash writes on embedded targets.
 - **Disk spool** — when memory is full, entries are flushed to disk in CBOR chunks. Oldest chunks are dropped when the spool size limit is reached.
 - **Publish order** — when connectivity is restored, the newest data is sent first (memory), then older backlog (disk, newest chunk first).
-- **Metrics aggregation** — OS samples are collected on a configurable interval and accumulated (sum / count / min / max) before uploading. Aggregation windows: `none`, `1m`, `1h`, `1d`.
+- **Metrics aggregation** — OS and custom samples are collected on a configurable interval and accumulated (sum / count / min / max) before uploading. Aggregation windows: `none`, `1m`, `1h`, `1d`.
+- **Custom metrics socket** — any local process can publish application-level metrics via a Unix socket using newline-delimited JSON. No SDK dependency required.
 - **Persistent MQTT connection** — single TLS connection to `mqtt.spotflow.io:8883`; reconnects automatically on failure.
 
 ## Installation
@@ -115,14 +118,11 @@ Build without the journald feature (for systems without systemd):
 cargo build --release --no-default-features
 ```
 
-A BitBake recipe will be provided in a future release.
-
 ---
 
 ### Manual run (testing, no systemd service)
 
 ```bash
-# Run with debug logging, reading config from a custom path
 sudo RUST_LOG=debug spotflowd /etc/spotflow/spotflowd.toml
 ```
 
@@ -130,6 +130,13 @@ sudo RUST_LOG=debug spotflowd /etc/spotflow/spotflowd.toml
 
 ```bash
 sudo usermod -aG adm $USER   # then log out and back in
+```
+
+Control the daemon's own log verbosity via `RUST_LOG`:
+
+```bash
+RUST_LOG=debug spotflowd       # verbose
+RUST_LOG=warn  spotflowd       # quiet
 ```
 
 ## Configuration
@@ -183,7 +190,7 @@ Metric groups (all enabled by default):
 
 | Group | Metrics |
 |---|---|
-| `cpu` | `cpu_utilization_percent`, `cpu_load_avg_1m/5m/15m`, `cpu_temperature` |
+| `cpu` | `cpu_utilization_percent`, `cpu_load_avg_1m`, `cpu_load_avg_5m`, `cpu_load_avg_15m`, `cpu_temperature` |
 | `memory` | `mem_available_bytes`, `mem_used_percent`, `swap_used_percent` |
 | `disk` | `disk_free_bytes`, `disk_used_percent`, `disk_inodes_used_percent`, `disk_read_bytes`, `disk_write_bytes`, `disk_read_ops`, `disk_write_ops`, `disk_io_util_percent` |
 | `network` | `network_rx_bytes`, `network_tx_bytes`, `net_rx_errors`, `net_tx_errors`, `net_rx_drops`, `net_tx_drops` |
@@ -260,16 +267,7 @@ Custom metrics flow through the same aggregator as OS metrics and respect the
 configured `aggregation_interval`. `[metrics.custom]` is independent of
 `[metrics] enabled` — custom metrics work without OS metrics enabled.
 
-## Log verbosity
-
-Control the daemon's own log output via `RUST_LOG`:
-
-```bash
-RUST_LOG=debug spotflowd       # verbose
-RUST_LOG=warn  spotflowd       # quiet
-```
-
-## Features
+## Build features
 
 | Feature    | Default | Description                       |
 |------------|---------|-----------------------------------|
@@ -280,26 +278,6 @@ Disable journald (e.g. for Yocto without systemd):
 ```bash
 cargo build --release --no-default-features
 ```
-
-## Troubleshooting
-
-| Symptom | Likely cause | Fix |
-|---|---|---|
-| `MQTT connection lost` in logs | Wrong `ingest_key` or no internet | Check credentials and connectivity |
-| `/var/log/syslog: permission denied` | Insufficient permissions | Run as root or add user to `adm` group |
-| `failed to open journald` | Missing `libsystemd-dev` | `apt-get install libsystemd-dev` |
-| Syslog file not found | `rsyslog` not installed | `apt-get install rsyslog` |
-| No logs in Spotflow dashboard | Both log sources disabled | Set `journald = true` or `syslog = true` under `[logs]` |
-| Duplicate log entries | Both `journald` and `syslog` enabled on systemd | Set `syslog = false` under `[logs]` (default on systemd builds) |
-| No metrics in dashboard | Metrics not enabled | Set `enabled = true` under `[metrics]` and restart |
-| Metrics appear with gaps | MQTT was offline for an extended period | Metrics are buffered in memory during outages and retried on reconnect; if offline long enough to exceed the 1000-entry buffer, the oldest readings are dropped |
-
-## Roadmap
-
-- [ ] Crash dump collection
-- [ ] Remote log-level control via MQTT
-- [ ] Snap package (Ubuntu Core)
-- [ ] Yocto / BitBake recipe
 
 ## License
 
