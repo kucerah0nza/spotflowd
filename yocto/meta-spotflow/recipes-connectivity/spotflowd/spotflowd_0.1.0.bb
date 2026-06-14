@@ -53,13 +53,14 @@ do_install() {
     install -d ${D}${sbindir}
     install -m 0755 ${CARGO_TARGET_DIR}/${CARGO_TARGET_SUBDIR}/spotflowd ${D}${sbindir}/spotflowd
 
-    # Config — install the example, then apply Yocto-appropriate defaults:
-    # syslog on, journald off, and use /var/log/messages (BusyBox syslogd default).
+    # Config — install the example, then uncomment and set Yocto-appropriate
+    # log defaults: syslog on, journald off, /var/log/messages.
     install -d ${D}${sysconfdir}/spotflow
     install -m 0600 ${S}/config/spotflowd.toml.example ${D}${sysconfdir}/spotflow/spotflowd.toml
-    sed -i 's/^journald = true/journald = false/' ${D}${sysconfdir}/spotflow/spotflowd.toml
-    sed -i 's/^syslog = false/syslog = true/'     ${D}${sysconfdir}/spotflow/spotflowd.toml
-    sed -i 's|^syslog_path = "/var/log/syslog"|syslog_path = "/var/log/messages"|' ${D}${sysconfdir}/spotflow/spotflowd.toml
+    sed -i 's/^# \[logs\]/[logs]/' ${D}${sysconfdir}/spotflow/spotflowd.toml
+    sed -i 's/^# journald = true/journald = false/' ${D}${sysconfdir}/spotflow/spotflowd.toml
+    sed -i 's/^# syslog = false/syslog = true/' ${D}${sysconfdir}/spotflow/spotflowd.toml
+    sed -i 's|^# syslog_path = "/var/log/syslog"|syslog_path = "/var/log/messages"|' ${D}${sysconfdir}/spotflow/spotflowd.toml
 
     # SysVinit script
     install -d ${D}${sysconfdir}/init.d

@@ -1,79 +1,88 @@
 # spotflowd configuration file
 # Default location: /etc/spotflow/spotflowd.toml
+#
+# Only [device] is required — all other sections have sensible defaults.
+# Uncomment and modify individual settings as needed.
+
+# ---------------------------------------------------------------------------
+# Device identity (REQUIRED)
+# ---------------------------------------------------------------------------
 
 [device]
-# Unique identifier for this device on the Spotflow platform.
 id = "my-device-001"
-# Ingest key obtained from the Spotflow dashboard.
 ingest_key = "sk_..."
 
-[mqtt]
-# Spotflow MQTT broker (default: mqtt.spotflow.io).
-broker = "mqtt.spotflow.io"
-# TLS port (default: 8883).
-port = 8883
-# MQTT keep-alive interval in seconds (default: 60).
-keepalive_secs = 60
+# ---------------------------------------------------------------------------
+# MQTT connection
+# ---------------------------------------------------------------------------
+# Normally you do not need to change these.
 
-[logs]
-# Collect logs from systemd journal (requires journald feature, default: true).
-journald = true
-# Collect logs by tailing a syslog file.
-# Default: false on systemd builds (journald already captures everything rsyslog
-# writes — enabling both causes duplicate entries). Default: true on Yocto/non-systemd.
-syslog = false
-# Path to the syslog file. Defaults to /var/log/syslog on Debian/Ubuntu
-# or /var/log/messages on RHEL/Yocto systems.
-syslog_path = "/var/log/syslog"
+# [mqtt]
+# broker = "mqtt.spotflow.io"
+# port = 8883
+# keepalive_secs = 60
 
-[logs.buffer]
-# Maximum number of log entries held in memory.
-# When this limit is reached, entries are flushed to a disk chunk.
-memory_max_entries = 1000
+# ---------------------------------------------------------------------------
+# Log collection
+# ---------------------------------------------------------------------------
+# spotflowd can collect logs from two sources: systemd journal and syslog.
+#
+# On systemd builds (default), journald is enabled and syslog is disabled
+# to avoid duplicate entries. On non-systemd builds (Yocto), the opposite
+# applies automatically — no config change needed.
 
-# Directory for on-disk spool chunk files.
-disk_path = "/var/lib/spotflow/spool"
+# [logs]
+# journald = true
+# syslog = false
+# syslog_path = "/var/log/syslog"
 
-# Maximum total size of the disk spool in megabytes.
-# When reached, the oldest chunk files are dropped to make room.
-disk_max_size_mb = 64
+# ---------------------------------------------------------------------------
+# Log buffer
+# ---------------------------------------------------------------------------
+# Logs are held in memory first, then flushed to disk chunks on overflow.
+# When the disk spool is full, the oldest chunks are dropped.
 
-# Number of log entries per disk chunk file.
-disk_chunk_max_entries = 200
+# [logs.buffer]
+# memory_max_entries = 1000
+# disk_path = "/var/lib/spotflow/spool"
+# disk_max_size_mb = 64
+# disk_chunk_max_entries = 200
 
-[metrics]
-# Set to true to enable OS metrics collection and upload.
-enabled = false
+# ---------------------------------------------------------------------------
+# OS metrics
+# ---------------------------------------------------------------------------
+# Collects CPU, memory, disk, and network metrics from /proc and /sys.
+# Disabled by default — set enabled = true to turn on.
 
-# How often to sample /proc and /sys (seconds). Zephyr SDK default: 10.
-collection_interval_secs = 10
+# [metrics]
+# enabled = false
+# collection_interval_secs = 10
+# aggregation_interval = "1m"       # none | 1m | 1h | 1d
 
-# Aggregation window before uploading.
-# "none"  → publish each raw sample immediately (highest resolution, most traffic)
-# "1m"    → accumulate samples for 1 minute, then upload sum/count/min/max
-# "1h"    → accumulate for 1 hour
-# "1d"    → accumulate for 1 day
-aggregation_interval = "1m"
+# Enable or disable individual metric groups.
+# All groups are enabled by default when [metrics] enabled = true.
 
-[metrics.groups]
-# Individual metric groups can be disabled to reduce traffic on constrained devices.
-cpu     = true   # cpu_usage_percent, load averages, temperature
-memory  = true   # mem_used_percent, mem_available_bytes, swap_used_percent
-disk    = true   # disk_free_bytes, disk_used_percent, disk_read_bytes, disk_write_bytes
-network = true   # network_rx_bytes, network_tx_bytes, net_rx_errors, net_tx_errors
-system  = true   # uptime_ms, process_count
+# [metrics.groups]
+# cpu     = true    # cpu_utilization_percent, load averages, temperature
+# memory  = true    # mem_used_percent, mem_available_bytes, swap_used_percent
+# disk    = true    # disk_free_bytes, disk_used_percent, disk_read/write_bytes
+# network = true    # network_rx/tx_bytes, net_rx/tx_errors, net_rx/tx_drops
+# system  = true    # uptime_ms, process_count, fd_used, fd_max
 
-[metrics.disk]
-# Mount points to report disk space for.
-mount_points = ["/"]
+# [metrics.disk]
+# mount_points = ["/"]
 
-[metrics.network]
-# Interfaces to report. Empty = auto-detect all non-loopback interfaces.
-interfaces = []
+# [metrics.network]
+# interfaces = []                   # empty = auto-detect all non-loopback
 
-[metrics.custom]
-# Accept custom metrics from local applications via a Unix domain socket.
-# Independent of [metrics] enabled — works without OS metrics.
-enabled = false
-# Path to the Unix socket. Any local process can connect and send metrics.
-socket_path = "/run/spotflow/metrics.sock"
+# ---------------------------------------------------------------------------
+# Custom application metrics
+# ---------------------------------------------------------------------------
+# Any local process can publish metrics via a Unix socket using
+# newline-delimited JSON. Independent of OS metrics — works on its own.
+#
+# Example:  echo '{"name":"queue_depth","value":42}' | nc -UN /run/spotflow/metrics.sock
+
+# [metrics.custom]
+# enabled = false
+# socket_path = "/run/spotflow/metrics.sock"
