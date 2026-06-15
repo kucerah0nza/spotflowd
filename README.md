@@ -25,7 +25,54 @@ metrics.sock  ────┘
 
 ## Installation
 
-### Debian / Ubuntu
+### Quick install (recommended)
+
+Install the latest pre-built binary with a single command:
+
+```bash
+curl -sSfL https://github.com/kucerah0nza/spotflowd/releases/latest/download/install.sh | sudo bash
+```
+
+This detects your architecture, downloads the correct binary, creates the `spotflow` system user, installs the systemd service, and drops a starter config at `/etc/spotflow/spotflowd.toml`.
+
+| Flag | Description |
+|------|-------------|
+| `--syslog-only` | Install the minimal build without journald support |
+| `--version 0.1.0` | Install a specific version instead of latest |
+
+Example — install the syslog-only variant:
+
+```bash
+curl -sSfL .../install.sh | sudo bash -s -- --syslog-only
+```
+
+After installing, edit `/etc/spotflow/spotflowd.toml` and set `device.id` and `device.ingest_key` from your Spotflow dashboard, then start the service:
+
+```bash
+sudo systemctl start spotflowd
+sudo journalctl -u spotflowd -f
+```
+
+---
+
+### Download pre-built binaries
+
+Pre-built binaries are available on the [GitHub Releases](https://github.com/kucerah0nza/spotflowd/releases) page.
+
+| Architecture | Target triple | Default (journald + syslog) | Syslog-only |
+|---|---|---|---|
+| x86-64 | `x86_64-unknown-linux-gnu` | `spotflowd-*-x86_64-unknown-linux-gnu.tar.gz` | `...-syslog-only.tar.gz` |
+| ARM64 | `aarch64-unknown-linux-gnu` | `spotflowd-*-aarch64-unknown-linux-gnu.tar.gz` | `...-syslog-only.tar.gz` |
+| ARMv7 | `armv7-unknown-linux-gnueabihf` | `spotflowd-*-armv7-unknown-linux-gnueabihf.tar.gz` | `...-syslog-only.tar.gz` |
+
+Each tarball contains the `spotflowd` binary, `spotflowd.toml.example`, and `spotflowd.service`.
+
+---
+
+### Build from source
+
+<details>
+<summary>Click to expand build-from-source instructions</summary>
 
 **1. Install system dependencies**
 
@@ -105,6 +152,8 @@ logger -p user.err "this is an error"
 ```
 
 The messages should appear in the Spotflow dashboard within seconds.
+
+</details>
 
 ---
 
