@@ -6,14 +6,16 @@ Collects **logs** (journald, syslog) and **OS metrics** (CPU, memory, disk, netw
 
 ## How it works
 
-```
-journald ──┐
-           ├──▶  memory buffer  ──▶  disk spool (on overflow)  ──▶  MQTT → Spotflow
-syslog  ───┘
+```mermaid
+flowchart LR
+    journald --> buffer[Memory buffer]
+    syslog --> buffer
+    buffer --> spool[Disk spool\non overflow]
+    spool --> mqtt1[MQTT → Spotflow]
 
-/proc, /sys ──────┐
-                  ├──▶  aggregator  ──▶  MQTT → Spotflow
-metrics.sock  ────┘
+    proc["/proc, /sys"] --> agg[Aggregator]
+    sock[metrics.sock] --> agg
+    agg --> mqtt2[MQTT → Spotflow]
 ```
 
 - **Memory-first buffer** — log entries are held in RAM (configurable size) to minimise flash writes on embedded targets.
