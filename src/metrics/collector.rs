@@ -1,14 +1,16 @@
 //! OS metric collector — reads /proc and /sys on each tick.
 //!
-//! Most counter metrics (disk I/O, network errors/drops) are sent as **absolute
-//! cumulative totals**, matching the Zephyr SDK convention.  The Spotflow
-//! platform computes deltas and rates server-side.
+//! Some counter metrics (network errors/drops) are sent as **absolute cumulative
+//! totals**, matching the Zephyr SDK convention.  The Spotflow platform computes
+//! deltas and rates server-side.
 //!
-//! `network_rx_bytes` and `network_tx_bytes` are exceptions — deltas are
-//! computed locally so the values flow through normal aggregation.
+//! Disk I/O (`disk_read_bytes`, `disk_write_bytes`, `disk_read_ops`,
+//! `disk_write_ops`) and network throughput (`network_rx_bytes`,
+//! `network_tx_bytes`) compute deltas locally so the values flow through
+//! normal aggregation.
 //!
-//! `disk_io_util_percent` is also a derived gauge computed locally from
-//! consecutive io_ms readings.
+//! `disk_io_util_percent` is a derived gauge computed locally from consecutive
+//! io_ms readings.
 //!
 //! Gauge metrics (CPU%, memory, temperature) emit on every tick.
 
@@ -133,30 +135,38 @@ impl Collector {
         let curr = read_diskstats();
         for (dev, c) in &curr {
             let lbl = &[("device", dev.clone())];
-            // Absolute cumulative counters — platform computes deltas server-side.
-            out.push(counter_sample(
-                "disk_read_bytes",
-                MetricValue::Int((c.read_sectors * 512) as i64),
-                lbl,
-            ));
-            out.push(counter_sample(
-                "disk_write_bytes",
-                MetricValue::Int((c.write_sectors * 512) as i64),
-                lbl,
-            ));
-            out.push(counter_sample(
-                "disk_read_ops",
-                MetricValue::Int(c.read_ops as i64),
-                lbl,
-            ));
-            out.push(counter_sample(
-                "disk_write_ops",
-                MetricValue::Int(c.write_ops as i64),
-                lbl,
-            ));
-            // io_util% is a derived gauge — computed locally from consecutive io_ms readings.
-            if elapsed_ms > 0 {
-                if let Some(p) = self.prev_disk.get(dev) {
+
+            // Disk I/O: emit deltas between consecutive readings so the
+            // values flow through normal aggregation.  Skip the first tick.
+            if let Some(p) = self.prev_disk.get(dev) {
+                let read_bytes_delta = (c.read_sectors.saturating_sub(p.read_sectors)) * 512;
+                let write_bytes_delta = (c.write_sectors.saturating_sub(p.write_sectors)) * 512;
+                let read_ops_delta = c.read_ops.saturating_sub(p.read_ops);
+                let write_ops_delta = c.write_ops.saturating_sub(p.write_ops);
+
+                out.push(sample(
+                    "disk_read_bytes",
+                    MetricValue::Int(read_bytes_delta as i64),
+                    lbl,
+                ));
+                out.push(sample(
+                    "disk_write_bytes",
+                    MetricValue::Int(write_bytes_delta as i64),
+                    lbl,
+                ));
+                out.push(sample(
+                    "disk_read_ops",
+                    MetricValue::Int(read_ops_delta as i64),
+                    lbl,
+                ));
+                out.push(sample(
+                    "disk_write_ops",
+                    MetricValue::Int(write_ops_delta as i64),
+                    lbl,
+                ));
+
+                // io_util% — derived gauge from consecutive io_ms readings.
+                if elapsed_ms > 0 {
                     if let (Some(curr_io), Some(prev_io)) = (c.io_ms, p.io_ms) {
                         let io_ms_delta = curr_io.saturating_sub(prev_io);
                         let util = (io_ms_delta as f64 / elapsed_ms as f64 * 100.0).min(100.0);
