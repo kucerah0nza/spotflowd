@@ -1,11 +1,14 @@
 //! OS metric collector — reads /proc and /sys on each tick.
 //!
-//! Counter metrics (disk I/O, network rx/tx) are sent as **absolute cumulative
-//! totals**, matching the Zephyr SDK convention.  The Spotflow platform computes
-//! deltas and rates server-side.
+//! Most counter metrics (disk I/O, network errors/drops) are sent as **absolute
+//! cumulative totals**, matching the Zephyr SDK convention.  The Spotflow
+//! platform computes deltas and rates server-side.
 //!
-//! `disk_io_util_percent` is the one exception — it is a derived gauge with no
-//! Zephyr equivalent, so we compute it locally from consecutive io_ms readings.
+//! `network_rx_bytes` and `network_tx_bytes` are exceptions — deltas are
+//! computed locally so the values flow through normal aggregation.
+//!
+//! `disk_io_util_percent` is also a derived gauge computed locally from
+//! consecutive io_ms readings.
 //!
 //! Gauge metrics (CPU%, memory, temperature) emit on every tick.
 
@@ -51,6 +54,7 @@ pub struct Collector {
     prev_cpu: Option<CpuTicks>,
     prev_disk: HashMap<String, DiskCounters>,
     prev_disk_time: Option<Instant>,
+    prev_net: HashMap<String, NetCounters>,
 }
 
 impl Collector {
@@ -59,6 +63,7 @@ impl Collector {
             prev_cpu: None,
             prev_disk: HashMap::new(),
             prev_disk_time: None,
+            prev_net: HashMap::new(),
         }
     }
 
@@ -85,7 +90,7 @@ impl Collector {
             } else {
                 Some(&cfg.network.interfaces)
             };
-            collect_network(&mut samples, filter);
+            self.collect_network(&mut samples, filter);
         }
         if cfg.groups.system {
             collect_system(&mut samples);
@@ -167,50 +172,60 @@ impl Collector {
         self.prev_disk = curr;
         self.prev_disk_time = Some(now);
     }
-}
 
-// --- Network (no inter-tick state needed) ---
+    // --- Network ---
 
-fn collect_network(out: &mut Vec<MetricSample>, filter: Option<&Vec<String>>) {
-    // Absolute cumulative counters — platform computes deltas server-side,
-    // matching the Zephyr SDK convention.
-    for (iface, c) in &read_net_dev() {
-        if let Some(f) = filter {
-            if !f.contains(iface) {
-                continue;
+    fn collect_network(&mut self, out: &mut Vec<MetricSample>, filter: Option<&Vec<String>>) {
+        let curr = read_net_dev();
+        for (iface, c) in &curr {
+            if let Some(f) = filter {
+                if !f.contains(iface) {
+                    continue;
+                }
             }
+            let lbl = &[("interface", iface.clone())];
+
+            // rx/tx bytes: emit delta between consecutive readings so the
+            // value flows through normal aggregation instead of growing
+            // monotonically.  Skip the first tick (no previous reading).
+            if let Some(prev) = self.prev_net.get(iface) {
+                let rx_delta = c.rx_bytes.saturating_sub(prev.rx_bytes);
+                let tx_delta = c.tx_bytes.saturating_sub(prev.tx_bytes);
+                out.push(sample(
+                    "network_rx_bytes",
+                    MetricValue::Int(rx_delta as i64),
+                    lbl,
+                ));
+                out.push(sample(
+                    "network_tx_bytes",
+                    MetricValue::Int(tx_delta as i64),
+                    lbl,
+                ));
+            }
+
+            // errors / drops — keep as cumulative counters for now.
+            out.push(counter_sample(
+                "net_rx_errors",
+                MetricValue::Int(c.rx_errors as i64),
+                lbl,
+            ));
+            out.push(counter_sample(
+                "net_tx_errors",
+                MetricValue::Int(c.tx_errors as i64),
+                lbl,
+            ));
+            out.push(counter_sample(
+                "net_rx_drops",
+                MetricValue::Int(c.rx_drops as i64),
+                lbl,
+            ));
+            out.push(counter_sample(
+                "net_tx_drops",
+                MetricValue::Int(c.tx_drops as i64),
+                lbl,
+            ));
         }
-        let lbl = &[("interface", iface.clone())];
-        out.push(counter_sample(
-            "network_rx_bytes",
-            MetricValue::Int(c.rx_bytes as i64),
-            lbl,
-        ));
-        out.push(counter_sample(
-            "network_tx_bytes",
-            MetricValue::Int(c.tx_bytes as i64),
-            lbl,
-        ));
-        out.push(counter_sample(
-            "net_rx_errors",
-            MetricValue::Int(c.rx_errors as i64),
-            lbl,
-        ));
-        out.push(counter_sample(
-            "net_tx_errors",
-            MetricValue::Int(c.tx_errors as i64),
-            lbl,
-        ));
-        out.push(counter_sample(
-            "net_rx_drops",
-            MetricValue::Int(c.rx_drops as i64),
-            lbl,
-        ));
-        out.push(counter_sample(
-            "net_tx_drops",
-            MetricValue::Int(c.tx_drops as i64),
-            lbl,
-        ));
+        self.prev_net = curr;
     }
 }
 
