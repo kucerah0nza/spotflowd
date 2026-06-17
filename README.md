@@ -74,7 +74,7 @@ Each tarball contains the `spotflowd` binary, `spotflowd.toml.example`, and `spo
 ### Build from source
 
 <details>
-<summary>Click to expand build-from-source instructions</summary>
+<summary>Click to expand</summary>
 
 **1. Install system dependencies**
 
@@ -161,6 +161,9 @@ The messages should appear in the Spotflow dashboard within seconds.
 
 ### Yocto (embedded Linux)
 
+<details>
+<summary>Click to expand</summary>
+
 A ready-made BitBake meta-layer is included at `yocto/meta-spotflow/`.
 
 **1. Add the layer to your build**
@@ -214,6 +217,37 @@ This builds spotflowd with journald log collection in addition to syslog.
 **Note:** The default Yocto config ships with `syslog = true` and
 `journald = false`, since most Yocto images use BusyBox syslogd rather than
 systemd-journald.
+
+</details>
+
+---
+
+### Avocado OS
+
+<details>
+<summary>Click to expand</summary>
+
+[Avocado OS](https://www.avocadolinux.org/) is a Yocto-based embedded Linux distribution by Peridio. It uses systemd, so spotflowd works with full journald support.
+
+Use the quick install script on a running Avocado device:
+
+```bash
+curl -sSfL https://github.com/kucerah0nza/spotflowd/releases/latest/download/install.sh | sudo bash
+```
+
+Or include spotflowd in your Avocado image build using the `meta-spotflow` Yocto layer — see the [Yocto](#yocto-embedded-linux) section above. Since Avocado uses systemd, enable journald in your `local.conf`:
+
+```
+PACKAGECONFIG:append:pn-spotflowd = " journald"
+```
+
+After installing, edit `/etc/spotflow/spotflowd.toml`, set `device.id` and `device.ingest_key`, and start the service:
+
+```bash
+sudo systemctl start spotflowd
+```
+
+</details>
 
 ---
 
