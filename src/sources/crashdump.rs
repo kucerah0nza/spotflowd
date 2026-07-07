@@ -186,7 +186,10 @@ fn encode_chunk(
             CborValue::Integer(0u64.into()),
             CborValue::Integer(MESSAGE_TYPE_CORE_DUMP.into()),
         ),
-        (CborValue::Integer(9u64.into()), CborValue::Integer(id.into())),
+        (
+            CborValue::Integer(9u64.into()),
+            CborValue::Integer(id.into()),
+        ),
         (
             CborValue::Integer(10u64.into()),
             CborValue::Integer(ordinal.into()),
@@ -300,7 +303,10 @@ impl State {
     fn load(path: &Path) -> Self {
         match std::fs::read(path) {
             Ok(bytes) => serde_json::from_slice(&bytes).unwrap_or_else(|e| {
-                warn!("crashdump: corrupt state file {}: {e} — starting fresh", path.display());
+                warn!(
+                    "crashdump: corrupt state file {}: {e} — starting fresh",
+                    path.display()
+                );
                 State::default()
             }),
             Err(_) => State::default(),

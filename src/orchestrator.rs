@@ -72,7 +72,8 @@ pub async fn run(
         let shutdown_rx = shutdown.clone();
         tokio::spawn(async move {
             if let Err(e) =
-                crate::sources::crashdump::run(cd_cfg, state_dir, publisher_clone, shutdown_rx).await
+                crate::sources::crashdump::run(cd_cfg, state_dir, publisher_clone, shutdown_rx)
+                    .await
             {
                 error!("crashdump task failed: {e}");
             }
