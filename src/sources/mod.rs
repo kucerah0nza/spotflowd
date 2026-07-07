@@ -1,3 +1,4 @@
+pub mod crashdump;
 pub mod syslog;
 
 #[cfg(feature = "journald")]

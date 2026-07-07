@@ -2,7 +2,7 @@
 
 Linux observability daemon for the [Spotflow](https://spotflow.io) platform.
 
-Collects **logs** (journald, syslog) and **OS metrics** (CPU, memory, disk, network), buffers them locally, and streams them to Spotflow over a persistent MQTT/TLS connection. Local applications can also publish **custom metrics** via a Unix domain socket.
+Collects **logs** (journald, syslog), **OS metrics** (CPU, memory, disk, network), and **kernel crash dumps** (pstore), buffers them locally, and streams them to Spotflow over a persistent MQTT/TLS connection. Local applications can also publish **custom metrics** via a Unix domain socket.
 
 ## How it works
 
@@ -16,6 +16,9 @@ flowchart LR
     proc["/proc, /sys"] --> agg[Aggregator]
     sock[metrics.sock] --> agg
     agg --> mqtt2[MQTT → Spotflow]
+
+    pstore["/sys/fs/pstore\nkernel panic"] --> chunks[CORE_DUMP_CHUNK]
+    chunks --> mqtt3[MQTT → Spotflow]
 ```
 
 - **Memory-first buffer** — log entries are held in RAM (configurable size) to minimise flash writes on embedded targets.
@@ -295,6 +298,7 @@ See [`config/spotflowd.toml.example`](config/spotflowd.toml.example) for all opt
 | `[metrics.disk]` | Mount points to report |
 | `[metrics.network]` | Network interfaces to report |
 | `[metrics.custom]` | Custom app metrics via Unix socket |
+| `[crashdump]` | Kernel crash dump collection via pstore |
 
 ### Minimal config
 
@@ -397,6 +401,60 @@ void send_metric(const char *name, double value) {
 Custom metrics flow through the same aggregator as OS metrics and respect the
 configured `aggregation_interval`. `[metrics.custom]` is independent of
 `[metrics] enabled` — custom metrics work without OS metrics enabled.
+
+## Kernel crash dumps
+
+When the Linux kernel panics or hits an oops, it writes the dmesg backtrace to
+**pstore** — persistent storage that survives the reboot, backed by a reserved
+RAM region (ramoops), EFI variables, or ACPI ERST. On the next boot the record
+appears under `/sys/fs/pstore` (e.g. `dmesg-ramoops-0`). `spotflowd` scans those
+records and uploads each as a Spotflow crash report, the same ingest path used
+for MCU coredumps.
+
+Because a panic implies a reboot, the record is captured on the **next startup**;
+a periodic rescan covers late-mounted pstore and repeat crashes. pstore itself is
+the durable on-device buffer — a record is deleted only after its dump has been
+fully published, and a small state file (`crashdump_state.json` in the spool dir)
+dedups deliveries so a failed delete never causes a re-send. The `coreDumpId` is
+derived deterministically from the record, so retries are idempotent on the
+platform.
+
+Enable it under `[crashdump]`:
+
+```toml
+[crashdump]
+enabled = true
+```
+
+> **Requires root.** Reading and clearing `/sys/fs/pstore` needs root privileges,
+> so run the daemon as root when crash-dump collection is enabled. Other features
+> remain unprivileged.
+
+| Option | Default | Description |
+|---|---|---|
+| `enabled` | `false` | Turn on crash-dump collection |
+| `paths` | `["/sys/fs/pstore"]` | Directories to scan for pstore records |
+| `kinds` | `["dmesg", "console"]` | Record filename prefixes to collect |
+| `delete_after_capture` | `true` | Clear the record after upload to free the ramoops ring |
+| `poll_interval_secs` | `300` | Rescan cadence (a startup scan always runs) |
+| `max_bytes` | `262144` | Per-record read cap (larger records are truncated) |
+| `chunk_bytes` | `8192` | Dump bytes per `CORE_DUMP_CHUNK` message |
+
+**Prerequisite — pstore/ramoops must be configured** in the kernel/device tree so
+panics are persisted. Verify after a test panic that files appear in
+`/sys/fs/pstore`. On a running system you can force a test panic with
+`echo c > /proc/sysrq-trigger` (this crashes the machine — use only on test
+devices).
+
+**systemd note:** if `systemd-pstore.service` is active it moves records into
+`/var/lib/systemd/pstore` before `spotflowd` sees them. Either disable that
+service, or add its archive directory to `paths`:
+
+```toml
+[crashdump]
+enabled = true
+paths = ["/sys/fs/pstore", "/var/lib/systemd/pstore"]
+```
 
 ## Build features
 
