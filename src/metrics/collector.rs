@@ -316,8 +316,11 @@ fn collect_system(out: &mut Vec<MetricSample>) {
         out.push(sample("process_count", MetricValue::Int(n as i64), &[]));
     }
     if let Some((used, max)) = read_fd_count() {
-        out.push(sample("fd_used", MetricValue::Int(used as i64), &[]));
-        out.push(sample("fd_max", MetricValue::Int(max as i64), &[]));
+        // Point-in-time gauges (current allocation vs. limit). Emitted raw, not
+        // summed — fd_max is ~i64::MAX on modern kernels and summing it across
+        // the window overflows f64 into meaningless values.
+        out.push(gauge_sample("fd_used", MetricValue::Int(used as i64), &[]));
+        out.push(gauge_sample("fd_max", MetricValue::Int(max as i64), &[]));
     }
 }
 
@@ -566,6 +569,7 @@ fn sample(
             .map(|(k, v)| (k.to_string(), v.clone()))
             .collect(),
         counter: false,
+        raw: false,
     }
 }
 
@@ -584,5 +588,25 @@ fn counter_sample(
             .map(|(k, v)| (k.to_string(), v.clone()))
             .collect(),
         counter: true,
+        raw: false,
+    }
+}
+
+/// Like `sample`, but marks the metric as a point-in-time gauge that is emitted
+/// instantaneously and never summed across the aggregation window.
+fn gauge_sample(
+    name: &'static str,
+    value: MetricValue,
+    labels: &[(&'static str, String)],
+) -> MetricSample {
+    MetricSample {
+        name: name.to_string(),
+        value,
+        labels: labels
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.clone()))
+            .collect(),
+        counter: false,
+        raw: true,
     }
 }
