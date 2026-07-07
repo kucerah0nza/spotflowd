@@ -68,6 +68,11 @@ pub struct MetricSample {
     /// These bypass aggregation and are always emitted as raw values —
     /// the Spotflow platform computes deltas server-side.
     pub counter: bool,
+    /// True for point-in-time gauges that must be reported instantaneously and
+    /// never summed across the aggregation window (e.g. fd_max, which is close
+    /// to i64::MAX — summing it overflows f64 precision into nonsense). Unlike
+    /// `counter`, the value is not cumulative, so the platform must not delta it.
+    pub raw: bool,
 }
 
 /// A metric ready to publish — either raw (agg=none) or fully aggregated.

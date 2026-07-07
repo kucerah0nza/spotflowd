@@ -107,10 +107,11 @@ impl Aggregator {
             let key = stream_key(&s.name, &s.labels);
             let v = s.value.as_f64();
 
-            if self.agg_duration.is_none() || s.counter {
-                // AGG_NONE or cumulative counter: publish immediately as a raw
-                // sample.  Counters must never be summed — the platform computes
-                // deltas server-side.
+            if self.agg_duration.is_none() || s.counter || s.raw {
+                // AGG_NONE, cumulative counter, or point-in-time gauge: publish
+                // immediately as a raw sample. Counters must never be summed (the
+                // platform computes deltas server-side); raw gauges must never be
+                // summed either (e.g. fd_max ≈ i64::MAX would overflow f64).
                 let seq = self.next_seq(&key);
                 ready.push(ReadyMetric {
                     name: s.name,
@@ -252,4 +253,55 @@ fn load_seq(path: &PathBuf) -> HashMap<String, u64> {
         }
     }
     map
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Aggregator;
+    use crate::config::MetricsConfig;
+    use crate::metrics::{MetricSample, MetricValue, AGG_NONE};
+
+    fn aggregator_1m() -> Aggregator {
+        // MetricsConfig::default() uses aggregation_interval = "1m".
+        let dir = tempfile::tempdir().unwrap();
+        Aggregator::new(&MetricsConfig::default(), dir.path().to_path_buf()).unwrap()
+    }
+
+    fn make_sample(name: &str, value: MetricValue, counter: bool, raw: bool) -> MetricSample {
+        MetricSample {
+            name: name.to_string(),
+            value,
+            labels: vec![],
+            counter,
+            raw,
+        }
+    }
+
+    #[test]
+    fn raw_gauge_is_emitted_immediately_and_never_summed() {
+        let mut agg = aggregator_1m();
+        // fd_max ≈ i64::MAX — summing across a window would overflow f64.
+        let big = i64::MAX;
+        let s = make_sample("fd_max", MetricValue::Int(big), false, true);
+
+        let r1 = agg.ingest(vec![s.clone()], 1000);
+        let r2 = agg.ingest(vec![s.clone()], 2000);
+
+        // Each tick emits its own raw reading under the "1m" window.
+        assert_eq!(r1.len(), 1);
+        assert_eq!(r2.len(), 1);
+        assert_eq!(r1[0].agg_cbor, AGG_NONE);
+        assert!(r1[0].count.is_none());
+        // Value passes through untouched — not accumulated to ~2×.
+        assert_eq!(r1[0].sum, big as f64);
+        assert_eq!(r2[0].sum, big as f64);
+    }
+
+    #[test]
+    fn plain_gauge_accumulates_within_the_window() {
+        let mut agg = aggregator_1m();
+        let s = make_sample("mem_used_percent", MetricValue::Float(40.0), false, false);
+        // A normal gauge is buffered for aggregation, so nothing is emitted yet.
+        assert!(agg.ingest(vec![s], 1000).is_empty());
+    }
 }
