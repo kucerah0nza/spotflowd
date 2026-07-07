@@ -34,7 +34,7 @@ use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::sync::watch;
-use tokio::time::{interval, Duration, MissedTickBehavior};
+use tokio::time::{sleep, Duration};
 use tracing::{debug, info, warn};
 
 const MESSAGE_TYPE_CORE_DUMP: u64 = 2;
@@ -46,6 +46,20 @@ const STATE_RETENTION_SECS: u64 = 7 * 24 * 60 * 60;
 
 const STATE_FILE_NAME: &str = "crashdump_state.json";
 
+/// Backoff between scans when a crash dump is waiting but couldn't be sent yet
+/// (MQTT not connected, or an upload failed). Kept short so a dump captured at
+/// boot goes out seconds after the link comes up rather than after a full
+/// `poll_interval_secs` — the startup capture is the whole point of the feature.
+const RETRY_BACKOFF_SECS: u64 = 5;
+
+/// Whether the next scan should follow the short backoff or the full poll.
+enum ScanOutcome {
+    /// Nothing pending — wait the full `poll_interval_secs`.
+    Idle,
+    /// A dump is waiting to be sent (offline) or an upload failed — retry soon.
+    RetrySoon,
+}
+
 pub async fn run(
     cfg: CrashdumpConfig,
     state_dir: PathBuf,
@@ -56,22 +70,37 @@ pub async fn run(
     let mut state = State::load(&state_path);
     state.prune(now_secs());
 
-    // First tick fires immediately → startup scan.
-    let mut ticker = interval(Duration::from_secs(cfg.poll_interval_secs));
-    ticker.set_missed_tick_behavior(MissedTickBehavior::Skip);
-
     let build_id = read_kernel_build_id();
     if let Some(ref b) = build_id {
         debug!("crashdump: kernel buildId = {b}");
     }
 
+    // Scan immediately (startup capture), then sleep between scans. The delay
+    // shrinks to a short backoff whenever a dump is waiting to be delivered.
     loop {
-        tokio::select! {
-            _ = ticker.tick() => {
-                if let Err(e) = scan_and_publish(&cfg, &publisher, build_id.as_deref(), &mut state, &state_path).await {
-                    warn!("crashdump scan failed: {e}");
-                }
+        let outcome = match scan_and_publish(
+            &cfg,
+            &publisher,
+            build_id.as_deref(),
+            &mut state,
+            &state_path,
+        )
+        .await
+        {
+            Ok(o) => o,
+            Err(e) => {
+                warn!("crashdump scan failed: {e}");
+                ScanOutcome::Idle
             }
+        };
+
+        let delay = match outcome {
+            ScanOutcome::RetrySoon => RETRY_BACKOFF_SECS.min(cfg.poll_interval_secs),
+            ScanOutcome::Idle => cfg.poll_interval_secs,
+        };
+
+        tokio::select! {
+            _ = sleep(Duration::from_secs(delay)) => {}
             _ = shutdown.changed() => break,
         }
     }
@@ -84,11 +113,10 @@ async fn scan_and_publish(
     build_id: Option<&str>,
     state: &mut State,
     state_path: &Path,
-) -> Result<()> {
-    if !publisher.is_connected() {
-        debug!("crashdump: MQTT not connected, deferring scan");
-        return Ok(());
-    }
+) -> Result<ScanOutcome> {
+    let connected = publisher.is_connected();
+    // Count of undelivered dumps we couldn't send this pass (offline).
+    let mut deferred = 0usize;
 
     for dir in &cfg.paths {
         // A missing directory just means pstore isn't mounted here — not an error.
@@ -120,6 +148,13 @@ async fn scan_and_publish(
                 continue;
             }
 
+            // An undelivered dump exists but the link is down — remember it and
+            // retry on the short backoff instead of the full poll interval.
+            if !connected {
+                deferred += 1;
+                continue;
+            }
+
             let content = match read_capped(&path, cfg.max_bytes) {
                 Ok(c) => c,
                 Err(e) => {
@@ -146,15 +181,21 @@ async fn scan_and_publish(
                     maybe_delete(cfg, &path, &fname);
                 }
                 Err(e) => {
-                    // Leave the record in place and stop this pass; pstore is the
-                    // buffer, so we retry on the next tick.
+                    // Leave the record in place; pstore is the buffer, so we
+                    // retry soon rather than waiting a full poll interval.
                     warn!("crashdump: upload failed for {fname}: {e} — will retry");
-                    return Ok(());
+                    return Ok(ScanOutcome::RetrySoon);
                 }
             }
         }
     }
-    Ok(())
+
+    if deferred > 0 {
+        debug!("crashdump: {deferred} dump(s) waiting, MQTT not connected — will retry");
+        Ok(ScanOutcome::RetrySoon)
+    } else {
+        Ok(ScanOutcome::Idle)
+    }
 }
 
 /// Publish a dump as one or more CORE_DUMP_CHUNK messages. Returns the chunk count.
