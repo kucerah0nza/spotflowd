@@ -65,6 +65,20 @@ pub async fn run(
         });
     }
 
+    if cfg.crashdump.enabled {
+        let cd_cfg = cfg.crashdump.clone();
+        let state_dir = cfg.logs.buffer.disk_path.clone();
+        let publisher_clone = publisher.clone();
+        let shutdown_rx = shutdown.clone();
+        tokio::spawn(async move {
+            if let Err(e) =
+                crate::sources::crashdump::run(cd_cfg, state_dir, publisher_clone, shutdown_rx).await
+            {
+                error!("crashdump task failed: {e}");
+            }
+        });
+    }
+
     drop(tx);
 
     // -----------------------------------------------------------------------

@@ -13,6 +13,56 @@ pub struct Config {
     pub logs: LogsConfig,
     #[serde(default)]
     pub metrics: MetricsConfig,
+    #[serde(default)]
+    pub crashdump: CrashdumpConfig,
+}
+
+// ---------------------------------------------------------------------------
+// Crash dumps (kernel panics via pstore/ramoops)
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct CrashdumpConfig {
+    /// Set to true to collect kernel crash dumps from pstore and upload them
+    /// as CORE_DUMP_CHUNK messages. Requires the daemon to run as root
+    /// (reading and clearing /sys/fs/pstore needs root).
+    #[serde(default)]
+    pub enabled: bool,
+    /// Directories to scan for pstore records. Default: /sys/fs/pstore.
+    /// Add /var/lib/systemd/pstore when systemd-pstore.service archives records.
+    #[serde(default = "default_pstore_paths")]
+    pub paths: Vec<PathBuf>,
+    /// pstore record kinds (filename prefixes) to collect. Default: dmesg, console.
+    #[serde(default = "default_crashdump_kinds")]
+    pub kinds: Vec<String>,
+    /// Delete a pstore record after its dump has been fully published, freeing
+    /// the ramoops ring buffer for the next crash. Default: true.
+    #[serde(default = "default_true")]
+    pub delete_after_capture: bool,
+    /// How often to rescan the pstore directories (seconds). A startup scan
+    /// always runs immediately regardless of this value.
+    #[serde(default = "default_crashdump_poll_interval")]
+    pub poll_interval_secs: u64,
+    /// Maximum bytes read from a single record (larger records are truncated).
+    #[serde(default = "default_crashdump_max_bytes")]
+    pub max_bytes: usize,
+    /// Payload size of each CORE_DUMP_CHUNK (bytes of dump content per message).
+    #[serde(default = "default_crashdump_chunk_bytes")]
+    pub chunk_bytes: usize,
+}
+
+impl Default for CrashdumpConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            paths: default_pstore_paths(),
+            kinds: default_crashdump_kinds(),
+            delete_after_capture: true,
+            poll_interval_secs: default_crashdump_poll_interval(),
+            max_bytes: default_crashdump_max_bytes(),
+            chunk_bytes: default_crashdump_chunk_bytes(),
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -242,6 +292,23 @@ impl Config {
                 anyhow::bail!("metrics.aggregation_interval must be one of: none, 1m, 1h, 1d");
             }
         }
+        if self.crashdump.enabled {
+            if self.crashdump.paths.is_empty() {
+                anyhow::bail!("crashdump.paths must not be empty");
+            }
+            if self.crashdump.kinds.is_empty() {
+                anyhow::bail!("crashdump.kinds must not be empty");
+            }
+            if self.crashdump.poll_interval_secs == 0 {
+                anyhow::bail!("crashdump.poll_interval_secs must be > 0");
+            }
+            if self.crashdump.max_bytes == 0 {
+                anyhow::bail!("crashdump.max_bytes must be > 0");
+            }
+            if self.crashdump.chunk_bytes == 0 {
+                anyhow::bail!("crashdump.chunk_bytes must be > 0");
+            }
+        }
         Ok(())
     }
 }
@@ -296,4 +363,19 @@ fn default_mount_points() -> Vec<String> {
 }
 fn default_custom_socket_path() -> PathBuf {
     PathBuf::from("/run/spotflow/metrics.sock")
+}
+fn default_pstore_paths() -> Vec<PathBuf> {
+    vec![PathBuf::from("/sys/fs/pstore")]
+}
+fn default_crashdump_kinds() -> Vec<String> {
+    vec!["dmesg".to_string(), "console".to_string()]
+}
+fn default_crashdump_poll_interval() -> u64 {
+    300
+}
+fn default_crashdump_max_bytes() -> usize {
+    262_144
+}
+fn default_crashdump_chunk_bytes() -> usize {
+    8_192
 }

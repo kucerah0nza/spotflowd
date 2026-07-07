@@ -86,3 +86,26 @@ ingest_key = "sk_..."
 # [metrics.custom]
 # enabled = false
 # socket_path = "/run/spotflow/metrics.sock"
+
+# ---------------------------------------------------------------------------
+# Kernel crash dumps
+# ---------------------------------------------------------------------------
+# Collects kernel panic/oops backtraces from pstore (ramoops-backed reserved
+# RAM, EFI, or ACPI ERST) and uploads them as crash reports. A panic implies a
+# reboot, so records are captured on the next startup and cleared afterwards.
+#
+# Requires the daemon to run as ROOT — reading and clearing /sys/fs/pstore
+# needs root. Disabled by default.
+#
+# If systemd-pstore.service is active it moves records into
+# /var/lib/systemd/pstore before we see them; either disable that service or
+# add its archive directory to `paths`.
+
+# [crashdump]
+# enabled = false
+# paths = ["/sys/fs/pstore"]        # add "/var/lib/systemd/pstore" for systemd-pstore
+# kinds = ["dmesg", "console"]      # pstore record prefixes to collect
+# delete_after_capture = true       # free the ramoops ring after upload
+# poll_interval_secs = 300          # rescan cadence (startup scan always runs)
+# max_bytes = 262144                # per-record cap (truncate pathological dumps)
+# chunk_bytes = 8192                # dump bytes per CORE_DUMP_CHUNK message
